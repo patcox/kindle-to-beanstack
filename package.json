@@ -1,0 +1,11 @@
+{
+  "name": "kindle-to-beanstack",
+  "version": "0.1.0",
+  "description": "Pull Kindle/Amazon Kids+ reading activity into a Beanstack reading challenge, with a human review step before anything is submitted.",
+  "type": "module",
+  "private": true,
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test"
+  }
+}

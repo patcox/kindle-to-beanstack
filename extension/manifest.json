@@ -1,0 +1,35 @@
+{
+  "manifest_version": 3,
+  "name": "Kindle Reading → Beanstack",
+  "version": "0.1.0",
+  "description": "Pulls kids' Kindle/Amazon Kids+ reading activity from the Amazon Parent Dashboard and helps log it into a library's Beanstack reading challenge, with a human review step before anything is submitted.",
+  "permissions": ["storage", "tabs"],
+  "host_permissions": [
+    "https://www.amazon.com/*",
+    "https://*.beanstack.com/*",
+    "https://beanstackbooks.beanstack.com/*"
+  ],
+  "content_scripts": [
+    {
+      "matches": ["https://www.amazon.com/parentdashboard/*"],
+      "js": ["content-scripts/amazon.js"],
+      "type": "module",
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://*.beanstack.com/*"],
+      "js": ["content-scripts/beanstack.js"],
+      "type": "module",
+      "run_at": "document_idle"
+    }
+  ],
+  "action": {
+    "default_popup": "popup/setup.html"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["lib/*.js"],
+      "matches": ["https://www.amazon.com/*", "https://*.beanstack.com/*"]
+    }
+  ]
+}

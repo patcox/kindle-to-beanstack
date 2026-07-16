@@ -1,0 +1,72 @@
+{
+  "activityV2Data": [
+    {
+      "category": "BOOK",
+      "aggregatedDuration": 5100,
+      "aggregatedCount": 15,
+      "intervals": [
+        {
+          "startTime": 1782925200,
+          "endTime": 1783011599,
+          "aggregatedDuration": 1800,
+          "aggregatedCount": 5,
+          "aggregatedActivityResults": [
+            {
+              "key": "//amazon-book/B0TESTWIMPY",
+              "activityCount": 5,
+              "activityDuration": 1800,
+              "attributes": {
+                "IS_STORE_ITEM": "true",
+                "ORIGINAL_KEY": "B0TESTWIMPY",
+                "AUTHORITY": "AMAZON_BOOK",
+                "DETAIL_PAGE_LINK": "https://amazon.com/dp/B0TESTWIMPY",
+                "THUMBNAIL_URL": "https://images-na.ssl-images-amazon.com/images/I/fake-wimpy.jpg",
+                "TITLE": "Diary of a Wimpy Kid",
+                "CATEGORY": "BOOK"
+              },
+              "lastActivityTimeStamp": 1782930000
+            }
+          ]
+        },
+        {
+          "startTime": 1783011600,
+          "endTime": 1783097999,
+          "aggregatedDuration": 3300,
+          "aggregatedCount": 10,
+          "aggregatedActivityResults": [
+            {
+              "key": "//amazon-book/B0TESTDOGMAN",
+              "activityCount": 8,
+              "activityDuration": 2700,
+              "attributes": {
+                "IS_STORE_ITEM": "true",
+                "ORIGINAL_KEY": "B0TESTDOGMAN",
+                "AUTHORITY": "AMAZON_BOOK",
+                "DETAIL_PAGE_LINK": "https://amazon.com/dp/B0TESTDOGMAN",
+                "THUMBNAIL_URL": "https://images-na.ssl-images-amazon.com/images/I/fake-dogman.jpg",
+                "TITLE": "Dog Man",
+                "CATEGORY": "BOOK"
+              },
+              "lastActivityTimeStamp": 1783015000
+            },
+            {
+              "key": "//amazon-book/B0TESTWIMPY",
+              "activityCount": 2,
+              "activityDuration": 600,
+              "attributes": {
+                "IS_STORE_ITEM": "true",
+                "ORIGINAL_KEY": "B0TESTWIMPY",
+                "AUTHORITY": "AMAZON_BOOK",
+                "DETAIL_PAGE_LINK": "https://amazon.com/dp/B0TESTWIMPY",
+                "THUMBNAIL_URL": "https://images-na.ssl-images-amazon.com/images/I/fake-wimpy.jpg",
+                "TITLE": "Diary of a Wimpy Kid",
+                "CATEGORY": "BOOK"
+              },
+              "lastActivityTimeStamp": 1783018000
+            }
+          ]
+        }
+      ]
+    }
+  ]
+}

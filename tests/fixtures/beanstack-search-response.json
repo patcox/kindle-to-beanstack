@@ -1,0 +1,38 @@
+[
+  {
+    "id": 12345,
+    "title": "Diary of a Wimpy Kid",
+    "authors": "Jeff Kinney",
+    "isbn_10": "0810993139",
+    "isbn_13": "9780810993136",
+    "image": "https://books.beanstack-cdn.com/fake-wimpy-hc.jpg",
+    "page_count": 217,
+    "lexile_information": {
+      "id": 555,
+      "lexile": 950,
+      "lexile_display": "950L",
+      "lexile_code": "",
+      "series": "Diary of a Wimpy Kid",
+      "publisher": "Amulet Books"
+    },
+    "verified": true
+  },
+  {
+    "id": 67890,
+    "title": "Diary of a Wimpy Kid",
+    "authors": "Jeff Kinney",
+    "isbn_10": "0810970686",
+    "isbn_13": "9780810970687",
+    "image": "https://books.beanstack-cdn.com/fake-wimpy-pb.jpg",
+    "page_count": 224,
+    "lexile_information": {
+      "id": 556,
+      "lexile": 950,
+      "lexile_display": "950L",
+      "lexile_code": "",
+      "series": "Diary of a Wimpy Kid",
+      "publisher": "Amulet Books"
+    },
+    "verified": true
+  }
+]
