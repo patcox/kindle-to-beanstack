@@ -31,11 +31,34 @@ though — this project uses those directly instead of scraping rendered HTML.
    app uses, for a date range you pick, for each configured kid. Returns
    per-day, per-title minutes.
 2. **Beanstack side** — a content script on your library's Beanstack site
-   searches Beanstack's book catalog for each title (using title/author, and
-   ISBN when available, for a more precise match), shows you a review table
-   before anything is submitted, and — only for entries you accept — submits
-   the reading log the same way Beanstack's own "Log Reading" form does.
+   skips any entry under a minimum-minutes threshold (default 5, adjustable
+   in the panel — see below for why), searches Beanstack's book catalog for
+   each remaining title (using title/author, and ISBN when available, for a
+   more precise match), shows you a review table before anything is
+   submitted, and — only for entries you accept — submits the reading log
+   the same way Beanstack's own "Log Reading" form does.
 3. Nothing is submitted without you reviewing it first.
+
+### Why a minimum-minutes threshold
+
+A lot of Kindle activity is a few minutes of incidental use (checking a
+dictionary definition, a quick re-open) that isn't really worth its own
+Beanstack log entry. A real-data analysis across three kids' reading since
+June 2026 (258 day/title entries) found:
+
+| Threshold | Fewer log entries | Minutes lost |
+|---|---|---|
+| < 5 min | 16% | 0.7% |
+| < 10 min | 28% | 2.8% |
+| < 15 min | 34% | 4.7% |
+
+5 minutes is a clean trade — a meaningful cut in tedious entries for
+negligible lost credit. The effect isn't uniform across kids, though: a
+reader whose sessions run short (e.g. lots of individual comic issues)
+loses proportionally more at higher thresholds than one who reads in long
+novel-length sessions. That's why it's an adjustable setting, not a
+hardcoded constant, and why excluded entries are reported as a count
+rather than silently dropped.
 
 ## Setup
 

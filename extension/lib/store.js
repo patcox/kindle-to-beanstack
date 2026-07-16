@@ -4,6 +4,22 @@
 
 const KIDS_KEY = "kb_kids"; // [{ childDirectedId, name }]
 const READING_DATASET_KEY = "kb_reading_dataset"; // [{ childDirectedId, date, asin, title, minutes, isbn }]
+const MIN_MINUTES_KEY = "kb_min_minutes_threshold";
+
+// Default chosen from a real-data analysis (see README): a 5-minute cutoff
+// trims ~16% of log entries for a ~0.7% loss in total credited minutes —
+// a good trade. 10+ minutes starts cutting real reading time for kids whose
+// sessions run shorter (e.g. comic-issue readers), so it isn't the default.
+const DEFAULT_MIN_MINUTES = 5;
+
+export async function getMinMinutesThreshold() {
+  const { [MIN_MINUTES_KEY]: minutes } = await chrome.storage.local.get(MIN_MINUTES_KEY);
+  return minutes ?? DEFAULT_MIN_MINUTES;
+}
+
+export async function setMinMinutesThreshold(minutes) {
+  await chrome.storage.local.set({ [MIN_MINUTES_KEY]: minutes });
+}
 
 export async function getKids() {
   const { [KIDS_KEY]: kids } = await chrome.storage.local.get(KIDS_KEY);

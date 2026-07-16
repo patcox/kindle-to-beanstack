@@ -6,8 +6,9 @@
 
 import { installAuthTokenWatcher, getCapturedToken, searchCatalog, getCsrfToken, buildLogPayload, submitLog } from "../lib/beanstack-client.js";
 import { pickBestMatch } from "../lib/matcher.js";
-import { getKids, getReadingDataset } from "../lib/store.js";
+import { getKids, getReadingDataset, getMinMinutesThreshold, setMinMinutesThreshold } from "../lib/store.js";
 import { getSubmittedKeys, markSubmitted, isSubmitted } from "../lib/dedupe-store.js";
+import { splitByThreshold } from "../lib/report.js";
 
 const READER_PAIRINGS_KEY = "kb_reader_pairings"; // { [childDirectedId]: beanstackProfileId }
 
@@ -39,6 +40,9 @@ function buildPanel() {
   panel.innerHTML = `
     <div style="font-weight:600; margin-bottom:8px;">Kindle → Beanstack: Review &amp; Log</div>
     <div id="kb-pairing-section"></div>
+    <div style="margin-top:8px;">
+      Skip entries under <input type="number" id="kb-threshold-input" min="0" step="1" style="width:50px;"> minutes
+    </div>
     <button id="kb-review-btn" style="margin-top:8px;">Find matches to review</button>
     <div id="kb-review-status" style="font-size:12px; color:#555; margin-top:4px;"></div>
     <div id="kb-review-table"></div>
@@ -92,9 +96,21 @@ async function findMatches(panel) {
   const dataset = await getReadingDataset();
   const submitted = await getSubmittedKeys();
 
-  const pending = dataset.filter((entry) => !isSubmitted(submitted, entry) && pairings[entry.childDirectedId]);
-  if (pending.length === 0) {
+  const eligible = dataset.filter((entry) => !isSubmitted(submitted, entry) && pairings[entry.childDirectedId]);
+  if (eligible.length === 0) {
     statusEl.textContent = "Nothing to review — either everything's already logged, or no reading data has been pulled yet.";
+    return;
+  }
+
+  const threshold = await getMinMinutesThreshold();
+  const { kept: pending, excluded } = splitByThreshold(eligible, threshold);
+  const excludedMinutes = Math.round(excluded.reduce((sum, e) => sum + e.minutes, 0));
+  const excludedNote = excluded.length
+    ? ` (skipped ${excluded.length} entr${excluded.length === 1 ? "y" : "ies"} under ${threshold} min, ${excludedMinutes} min total)`
+    : "";
+
+  if (pending.length === 0) {
+    statusEl.textContent = `Nothing to review above the ${threshold}-minute threshold${excludedNote}.`;
     return;
   }
 
@@ -125,7 +141,7 @@ async function findMatches(panel) {
       accepted: confidence === "high" || confidence === "medium",
     });
   }
-  statusEl.textContent = `Found matches for ${reviewRows.length} entries. Review below, then submit.`;
+  statusEl.textContent = `Found matches for ${reviewRows.length} entries${excludedNote}. Review below, then submit.`;
   renderReviewTable(panel);
 }
 
@@ -203,6 +219,14 @@ async function init() {
   installAuthTokenWatcher();
   const panel = buildPanel();
   await renderPairingSection(panel);
+
+  const thresholdInput = panel.querySelector("#kb-threshold-input");
+  thresholdInput.value = await getMinMinutesThreshold();
+  thresholdInput.addEventListener("change", () => {
+    const value = Math.max(0, Number(thresholdInput.value) || 0);
+    thresholdInput.value = value;
+    setMinMinutesThreshold(value);
+  });
 
   panel.querySelector("#kb-review-btn").addEventListener("click", () => {
     findMatches(panel).catch((err) => {

@@ -91,3 +91,19 @@ export function buildReport(dataset, kids) {
   }
   return report;
 }
+
+/**
+ * Splits entries into those meeting a minimum-minutes threshold and those
+ * below it. A short reading blip (a couple minutes checking a dictionary
+ * definition, say) usually isn't worth a separate Beanstack log entry —
+ * see README for the real-data analysis behind picking a default. Pure.
+ * @returns {{kept: object[], excluded: object[]}}
+ */
+export function splitByThreshold(entries, minMinutes) {
+  const kept = [];
+  const excluded = [];
+  for (const entry of entries) {
+    (entry.minutes >= minMinutes ? kept : excluded).push(entry);
+  }
+  return { kept, excluded };
+}

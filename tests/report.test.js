@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mondayOf, addDays, aggregateByTitle, aggregateByWeek, buildKidReport, buildReport } from "../extension/lib/report.js";
+import { mondayOf, addDays, aggregateByTitle, aggregateByWeek, buildKidReport, buildReport, splitByThreshold } from "../extension/lib/report.js";
 
 test("mondayOf finds the Monday of the containing week", () => {
   // 2026-07-01 is a Wednesday
@@ -44,6 +44,25 @@ test("buildKidReport combines titles, weeks, and a total", () => {
   assert.equal(report.totalMinutes, 105);
   assert.equal(report.titles.length, 2);
   assert.equal(report.weeks.length, 2);
+});
+
+test("splitByThreshold separates entries at the minutes cutoff (inclusive)", () => {
+  const entries = [
+    { title: "A", minutes: 3 },
+    { title: "B", minutes: 5 },
+    { title: "C", minutes: 4.9 },
+    { title: "D", minutes: 20 },
+  ];
+  const { kept, excluded } = splitByThreshold(entries, 5);
+  assert.deepEqual(kept.map((e) => e.title), ["B", "D"]);
+  assert.deepEqual(excluded.map((e) => e.title), ["A", "C"]);
+});
+
+test("splitByThreshold keeps everything when threshold is 0", () => {
+  const entries = [{ title: "A", minutes: 0.1 }];
+  const { kept, excluded } = splitByThreshold(entries, 0);
+  assert.equal(kept.length, 1);
+  assert.equal(excluded.length, 0);
 });
 
 test("buildReport groups entries by kid via childDirectedId", () => {

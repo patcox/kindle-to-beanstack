@@ -1,6 +1,15 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { getKids, setKids, addOrUpdateKid, getReadingDataset, mergeReadingDataset, entryKey } from "../extension/lib/store.js";
+import {
+  getKids,
+  setKids,
+  addOrUpdateKid,
+  getReadingDataset,
+  mergeReadingDataset,
+  entryKey,
+  getMinMinutesThreshold,
+  setMinMinutesThreshold,
+} from "../extension/lib/store.js";
 
 function installMockChromeStorage() {
   const data = {};
@@ -44,6 +53,15 @@ test("addOrUpdateKid adds a new kid and updates an existing one by childDirected
     { childDirectedId: "c1", name: "Alexandra" },
     { childDirectedId: "c2", name: "Sam" },
   ]);
+});
+
+test("getMinMinutesThreshold defaults to 5 minutes when unset", async () => {
+  assert.equal(await getMinMinutesThreshold(), 5);
+});
+
+test("setMinMinutesThreshold/getMinMinutesThreshold round-trip", async () => {
+  await setMinMinutesThreshold(8);
+  assert.equal(await getMinMinutesThreshold(), 8);
 });
 
 test("mergeReadingDataset dedupes by (childDirectedId, date, asin), keeping the newest value", async () => {
