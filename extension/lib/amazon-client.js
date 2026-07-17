@@ -5,6 +5,7 @@
 // data without needing a real browser session.
 
 const ACTIVITY_ENDPOINT = "https://www.amazon.com/parentdashboard/ajax/get-weekly-activities-v2";
+const HOUSEHOLD_ENDPOINT = "https://parents.amazon.com/ajax/get-household-with-age";
 
 /**
  * Builds the POST body for get-weekly-activities-v2.
@@ -83,6 +84,39 @@ export async function fetchActivity({ childDirectedId, startTime, endTime, timeZ
   }
   const json = await resp.json();
   return parseActivityResponse(json, { timeZone });
+}
+
+/**
+ * Pure. Normalizes a get-household-with-age response into just the kids.
+ * @returns {{childDirectedId: string, name: string}[]}
+ */
+export function parseHouseholdResponse(json) {
+  return (json?.members ?? [])
+    .filter((m) => m.role === "CHILD" && m.directedId)
+    .map((m) => ({ childDirectedId: m.directedId, name: m.firstName || "(unnamed)" }));
+}
+
+/**
+ * Fetches every kid in the household — name and childDirectedId together,
+ * in one request. This replaced an earlier approach (watching the
+ * activities endpoint fire as each kid's icon was clicked, then prompting
+ * for a name) that turned out to be unreliable in practice: Amazon's own
+ * page bundle also instruments window.fetch for its own analytics, and it
+ * was winning the race to be "the" window.fetch, silently swallowing our
+ * patch. This endpoint sidesteps that entirely — no interception needed.
+ *
+ * Lives on a different origin (parents.amazon.com) than the activity
+ * endpoint (www.amazon.com) — requires that origin in host_permissions
+ * and `credentials: "include"` so the cross-origin request still carries
+ * Amazon's session cookie. Inject `fetchImpl` in tests.
+ */
+export async function fetchHouseholdChildren(fetchImpl = fetch) {
+  const resp = await fetchImpl(HOUSEHOLD_ENDPOINT, { credentials: "include" });
+  if (!resp.ok) {
+    throw new Error(`get-household-with-age failed: HTTP ${resp.status}`);
+  }
+  const json = await resp.json();
+  return parseHouseholdResponse(json);
 }
 
 /**

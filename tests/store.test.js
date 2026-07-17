@@ -4,6 +4,7 @@ import {
   getKids,
   setKids,
   addOrUpdateKid,
+  removeKid,
   getReadingDataset,
   mergeReadingDataset,
   entryKey,
@@ -53,6 +54,19 @@ test("addOrUpdateKid adds a new kid and updates an existing one by childDirected
     { childDirectedId: "c1", name: "Alexandra" },
     { childDirectedId: "c2", name: "Sam" },
   ]);
+});
+
+test("removeKid drops only the matching kid", async () => {
+  await addOrUpdateKid({ childDirectedId: "c1", name: "Alex" });
+  await addOrUpdateKid({ childDirectedId: "c2", name: "Sam" });
+  await removeKid("c1");
+  assert.deepEqual(await getKids(), [{ childDirectedId: "c2", name: "Sam" }]);
+});
+
+test("removeKid is a no-op if the id isn't present", async () => {
+  await addOrUpdateKid({ childDirectedId: "c1", name: "Alex" });
+  await removeKid("does-not-exist");
+  assert.deepEqual(await getKids(), [{ childDirectedId: "c1", name: "Alex" }]);
 });
 
 test("getMinMinutesThreshold defaults to 5 minutes when unset", async () => {

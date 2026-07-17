@@ -35,27 +35,24 @@ export function isTokenValid(token, nowSeconds = Math.floor(Date.now() / 1000)) 
 }
 
 /**
- * Patches XMLHttpRequest (Beanstack's frontend uses XHR, not fetch, for
- * this call) to capture the Authorization header it sends to
- * book_autocomplete. Call once per page load, before the user interacts
- * with anything that would trigger a catalog search. Side-effecting — not
- * unit tested directly, only the pure helpers above are.
+ * Listens for the Authorization header beanstack-main-world.js observes on
+ * the page's real book_autocomplete XHR calls, relayed via postMessage.
+ * The patching itself can't happen here: this module runs in the content
+ * script's isolated world, which has its own separate XMLHttpRequest from
+ * the page's — patching it here would be invisible to the page's own code,
+ * which is the one actually making the call. Call once per page load,
+ * before the user interacts with anything that triggers a catalog search.
+ * Side-effecting — not unit tested directly, only the pure helpers above.
  */
 export function installAuthTokenWatcher() {
-  if (window.__kbXhrPatched) return;
-  window.__kbXhrPatched = true;
-  const origOpen = XMLHttpRequest.prototype.open;
-  const origSetHeader = XMLHttpRequest.prototype.setRequestHeader;
-  XMLHttpRequest.prototype.open = function (method, url, ...rest) {
-    this.__kbUrl = url;
-    return origOpen.call(this, method, url, ...rest);
-  };
-  XMLHttpRequest.prototype.setRequestHeader = function (name, value) {
-    if (this.__kbUrl && String(this.__kbUrl).includes("book_autocomplete") && /authorization/i.test(name)) {
-      capturedToken = value;
+  if (window.__kbListenerInstalled) return;
+  window.__kbListenerInstalled = true;
+  window.addEventListener("message", (event) => {
+    if (event.source !== window) return;
+    if (event.data?.source === "kb-beanstack-main-world" && event.data.token) {
+      capturedToken = event.data.token;
     }
-    return origSetHeader.call(this, name, value);
-  };
+  });
 }
 
 export function getCapturedToken() {

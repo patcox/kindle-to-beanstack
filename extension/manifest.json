@@ -10,8 +10,13 @@
     "128": "icons/icon128.png"
   },
   "permissions": ["storage", "tabs"],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
   "host_permissions": [
     "https://www.amazon.com/*",
+    "https://parents.amazon.com/*",
     "https://*.beanstack.com/*",
     "https://beanstackbooks.beanstack.com/*"
   ],
@@ -20,6 +25,12 @@
       "matches": ["https://www.amazon.com/parentdashboard/*"],
       "js": ["content-scripts/amazon.js"],
       "run_at": "document_idle"
+    },
+    {
+      "matches": ["https://*.beanstack.com/*"],
+      "js": ["content-scripts/beanstack-main-world.js"],
+      "world": "MAIN",
+      "run_at": "document_start"
     },
     {
       "matches": ["https://*.beanstack.com/*"],

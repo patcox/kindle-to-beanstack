@@ -99,10 +99,9 @@ rather than silently dropped.
 1. Load `extension/` as an unpacked extension in Chrome
    (`chrome://extensions` → Developer mode → Load unpacked).
 2. Open your Amazon Parent Dashboard. A floating panel appears — click
-   "Detect kids", then click each kid's profile icon at the top of the page
-   one at a time; the panel will ask you to name each one as it's detected
-   (this is network-based, not a guess at Amazon's DOM structure, so it's
-   more resilient to Amazon changing their page).
+   "Detect kids" once; it fetches every kid in the household (name and
+   ID together) in a single request, no clicking through profile icons or
+   typing names required.
 3. Open your library's Beanstack site — the panel there auto-detects every
    family reader's `profile_id` directly from the page's own reader-switcher
    (no dev tools, no clicking through each reader) and auto-pairs them with
@@ -173,16 +172,54 @@ Project layout:
 ```
 extension/
   manifest.json
-  content-scripts/amazon.js      floating panel on the Parent Dashboard
-  content-scripts/beanstack.js   floating panel on Beanstack
-  lib/                           pure-logic modules, unit tested in isolation
-  popup/                         setup dashboard + reading summary view
-tests/                           unit tests + synthetic fixtures
+  background.js                           cross-origin fetch relay only — see below
+  content-scripts/amazon.js               floating panel on the Parent Dashboard
+  content-scripts/beanstack.js            floating panel on Beanstack
+  content-scripts/beanstack-main-world.js network interception only — see below
+  lib/                                    pure-logic modules, unit tested in isolation
+  popup/                                  setup dashboard + reading summary view
+tests/                                    unit tests + synthetic fixtures
 ```
 
 The extension itself has zero runtime dependencies (plain JS, no build
 step) — `jsdom` is a devDependency used only by the test suite, to parse
 real HTML fixtures of Beanstack's reading-log page.
+
+**Why `background.js` exists.** `fetchHouseholdChildren` (see above) lives
+on `parents.amazon.com`, a different origin than the Parent Dashboard
+content script runs on (`www.amazon.com`) — a cross-origin request. The
+intuitive fix is adding that origin to `host_permissions`, but that alone
+doesn't work: `host_permissions` grants a cross-origin fetch bypass to the
+extension's own privileged contexts (a background service worker, the
+popup), not to a content script. A content script's network requests are
+still dispatched through the *hosting page's* own stack and bound by that
+page's real CORS policy, regardless of what the extension's manifest
+grants — confirmed live (`No 'Access-Control-Allow-Origin' header...`)
+before adding `background.js` to make the actual request from a context
+where the bypass genuinely applies, reached via `chrome.runtime.sendMessage`
+from `amazon.js`.
+
+**Why `beanstack-main-world.js` exists.** Content scripts run in an
+"isolated world" — sharing the page's DOM, but not its JS objects. Patching
+`XMLHttpRequest` from the isolated world only replaces that world's own
+copy; the page's real code has an entirely separate one, untouched by the
+patch. `beanstack-main-world.js` runs in the page's actual world
+(`"world": "MAIN"` in the manifest) to patch the real thing, and relays
+what it observes to the regular (isolated-world) `beanstack.js` via
+`postMessage` — the standard bridge between the two worlds.
+
+The Amazon side originally used the same pattern for kid detection (patching
+`window.fetch` to watch for the activities endpoint firing), but that turned
+out to be unreliable: Amazon's own page bundle *also* instruments
+`window.fetch` for its own analytics, and it was winning the race to be
+"the" `window.fetch`, silently swallowing our patch — no error, detection
+just quietly did nothing. It was replaced entirely once a much better
+option turned up during real testing: `get-household-with-age`
+(`parents.amazon.com`) returns every kid's name and `childDirectedId`
+together in one request, no interception needed at all. Left here as a
+cautionary example — the earlier failure mode couldn't have been caught by
+testing the interception logic in isolation, since the bug was entirely
+about *which JS world a script runs in*, not what the code inside it does.
 
 Everything under `extension/lib/` is written as small, pure, independently
 testable functions (request builders, response parsers, matching logic)

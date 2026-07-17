@@ -42,6 +42,14 @@ export async function addOrUpdateKid({ childDirectedId, name }) {
   return kids;
 }
 
+/** Removes one kid (e.g. a stale/test entry) by childDirectedId. */
+export async function removeKid(childDirectedId) {
+  const kids = await getKids();
+  const remaining = kids.filter((k) => k.childDirectedId !== childDirectedId);
+  await setKids(remaining);
+  return remaining;
+}
+
 export async function getReadingDataset() {
   const { [READING_DATASET_KEY]: dataset } = await chrome.storage.local.get(READING_DATASET_KEY);
   return dataset ?? [];

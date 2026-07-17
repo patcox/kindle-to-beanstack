@@ -10,6 +10,8 @@ import {
   fetchActivity,
   extractIsbn13FromHtml,
   fetchIsbnForAsin,
+  parseHouseholdResponse,
+  fetchHouseholdChildren,
 } from "../extension/lib/amazon-client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -112,4 +114,43 @@ test("fetchIsbnForAsin returns the parsed ISBN for a successful fetch", async ()
 test("fetchIsbnForAsin returns null on a non-OK response", async () => {
   const fakeFetch = async () => ({ ok: false });
   assert.equal(await fetchIsbnForAsin("B0TESTWIMPY", fakeFetch), null);
+});
+
+const householdFixture = {
+  householdId: "HHFAKE0000000",
+  members: [
+    { role: "ADULT", firstName: null, directedId: "test-fixture-adult-id-0000000000" },
+    { role: "CHILD", firstName: "Alex", directedId: "test-fixture-kid-id-alex-0000001", age: 10 },
+    { role: "CHILD", firstName: "Sam", directedId: "test-fixture-kid-id-sam-00000002", age: 8 },
+  ],
+};
+
+test("parseHouseholdResponse keeps only CHILD members, dropping adults", () => {
+  assert.deepEqual(parseHouseholdResponse(householdFixture), [
+    { childDirectedId: "test-fixture-kid-id-alex-0000001", name: "Alex" },
+    { childDirectedId: "test-fixture-kid-id-sam-00000002", name: "Sam" },
+  ]);
+});
+
+test("parseHouseholdResponse handles a missing/empty members list", () => {
+  assert.deepEqual(parseHouseholdResponse({}), []);
+  assert.deepEqual(parseHouseholdResponse({ members: [] }), []);
+});
+
+test("fetchHouseholdChildren fetches with credentials included and returns just the kids", async () => {
+  let capturedUrl, capturedOpts;
+  const fakeFetch = async (url, opts) => {
+    capturedUrl = url;
+    capturedOpts = opts;
+    return { ok: true, json: async () => householdFixture };
+  };
+  const kids = await fetchHouseholdChildren(fakeFetch);
+  assert.equal(capturedUrl, "https://parents.amazon.com/ajax/get-household-with-age");
+  assert.equal(capturedOpts.credentials, "include");
+  assert.equal(kids.length, 2);
+});
+
+test("fetchHouseholdChildren throws on a non-OK response", async () => {
+  const fakeFetch = async () => ({ ok: false, status: 500 });
+  await assert.rejects(() => fetchHouseholdChildren(fakeFetch));
 });
