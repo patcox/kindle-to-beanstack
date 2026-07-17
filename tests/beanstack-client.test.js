@@ -12,6 +12,7 @@ import {
   buildLogPayload,
   submitLog,
   parseReaderSwitcher,
+  deleteLoggedEntry,
 } from "../extension/lib/beanstack-client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -155,4 +156,29 @@ test("submitLog posts form-encoded data including the CSRF token", async () => {
 
 test("submitLog throws without a csrfToken", async () => {
   await assert.rejects(() => submitLog({}, { baseUrl: "https://dscl.beanstack.com", fetchImpl: async () => ({}) }));
+});
+
+test("deleteLoggedEntry posts the Rails method-override delete request", async () => {
+  let capturedUrl, capturedOpts;
+  const fakeFetch = async (url, opts) => {
+    capturedUrl = url;
+    capturedOpts = opts;
+    return { ok: true, status: 200 };
+  };
+  const resp = await deleteLoggedEntry("88888002", {
+    csrfToken: "tok123",
+    baseUrl: "https://dscl.beanstack.com",
+    fetchImpl: fakeFetch,
+  });
+  assert.equal(capturedUrl, "https://dscl.beanstack.com/logged_books/88888002");
+  assert.equal(capturedOpts.method, "POST");
+  assert.match(capturedOpts.body, /_method=delete/);
+  assert.match(capturedOpts.body, /authenticity_token=tok123/);
+  assert.equal(resp.ok, true);
+});
+
+test("deleteLoggedEntry throws without a csrfToken", async () => {
+  await assert.rejects(() =>
+    deleteLoggedEntry("1", { baseUrl: "https://dscl.beanstack.com", fetchImpl: async () => ({}) })
+  );
 });

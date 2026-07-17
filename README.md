@@ -32,12 +32,46 @@ though — this project uses those directly instead of scraping rendered HTML.
    per-day, per-title minutes.
 2. **Beanstack side** — a content script on your library's Beanstack site
    skips any entry under a minimum-minutes threshold (default 5, adjustable
-   in the panel — see below for why), searches Beanstack's book catalog for
-   each remaining title (using title/author, and ISBN when available, for a
-   more precise match), shows you a review table before anything is
-   submitted, and — only for entries you accept — submits the reading log
-   the same way Beanstack's own "Log Reading" form does.
+   in the panel — see below for why), checks what's *already* logged for
+   each remaining (kid, date, title) directly against Beanstack's own
+   reading-log pages (not just local memory — see idempotency below),
+   searches Beanstack's book catalog for anything new (using title/author,
+   and ISBN when available, for a more precise match), shows you a review
+   table before anything is submitted, and — only for entries you accept —
+   submits the reading log the same way Beanstack's own "Log Reading" form
+   does.
 3. Nothing is submitted without you reviewing it first.
+
+### Idempotency & cleanup
+
+Beanstack has no server-side duplicate protection — submitting the same
+(reader, book, date, minutes) twice creates two fully independent log
+entries and double-counts the minutes (confirmed live). So this tool checks
+against Beanstack's own log before submitting, not just its own local
+memory: for each candidate entry, it reads what's already logged for that
+exact (kid, date, title) directly off Beanstack's reading-log pages.
+
+The check is on **(date, title) only, not the amount** — if *any* entry
+already exists for that book on that day, it's treated as covered and
+skipped, regardless of how many minutes it logged. This is a deliberate
+simplification that rests on one assumption: **this tool is the only thing
+adding to that reader's Beanstack log.** If that holds, it's a correct and
+much simpler rule. If you also log some reading manually, a manual entry
+for the same book/day will cause Amazon's (likely larger, more complete)
+total to be skipped rather than added — so pick one approach per reader
+during the challenge, not both.
+
+This makes it safe to re-run the review panel repeatedly, including after
+reinstalling the extension or losing local storage — the check is against
+server truth, not a fragile local cache.
+
+**Undo last batch**: after each submitted batch, the panel re-reads the log
+to learn each new entry's Beanstack ID (the create response doesn't include
+one) and remembers them. "Undo last batch" deletes exactly those entries —
+using the same request Beanstack's own "Delete" button makes (verified
+live) — and un-marks them locally so they're eligible to review and submit
+again. Only the most recently submitted batch is undo-able this way; for
+anything older, delete manually from Beanstack's reading log.
 
 ### Why a minimum-minutes threshold
 
@@ -114,6 +148,14 @@ rather than silently dropped.
   still unverified** — confirmed working (live, real submission) when
   omitted entirely for a reader with exactly one active challenge; untested
   for a reader enrolled in two overlapping challenges at once.
+- **ID resolution for undo is heuristic, not guaranteed.** Since Beanstack's
+  create response carries no ID, "Undo last batch" learns IDs by diffing
+  the log before/after a submission. If two rows in the *same* batch would
+  land on the exact same (reader, date, normalized title) key, only one ID
+  can be confidently attributed — this shouldn't happen in practice (the
+  source dataset is already deduped to one row per kid/date/title before
+  it reaches this stage), but if an ID can't be resolved, that entry is
+  left out of the undo batch rather than guessed at.
 - No automated end-to-end tests exist against the live services (both
   require an authenticated session) — see `tests/` for what *is* covered
   (the pure request/response logic, against synthetic fixtures).
@@ -121,6 +163,7 @@ rather than silently dropped.
 ## Development
 
 ```
+npm install                       # only needed for tests — jsdom, a test-only dependency
 npm test                          # unit tests (node --test), no framework needed
 bash scripts/check-no-secrets.sh  # same check CI runs on every push/PR
 ```
@@ -136,6 +179,10 @@ extension/
   popup/                         setup dashboard + reading summary view
 tests/                           unit tests + synthetic fixtures
 ```
+
+The extension itself has zero runtime dependencies (plain JS, no build
+step) — `jsdom` is a devDependency used only by the test suite, to parse
+real HTML fixtures of Beanstack's reading-log page.
 
 Everything under `extension/lib/` is written as small, pure, independently
 testable functions (request builders, response parsers, matching logic)

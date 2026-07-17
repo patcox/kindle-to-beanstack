@@ -1,14 +1,34 @@
 // Floating panel injected on the library's Beanstack site. Loads the
-// reading dataset pulled from Amazon, searches Beanstack's catalog for each
-// not-yet-submitted (kid, date, title), shows a review table you approve or
-// override before anything is sent, then submits the accepted rows one at a
-// time with a small delay between requests.
+// reading dataset pulled from Amazon, reconciles it against what's already
+// logged (so re-running this is idempotent even if local storage gets
+// wiped — see reading-log.js), searches Beanstack's catalog for anything
+// new, shows a review table you approve or override before anything is
+// sent, submits the accepted rows one at a time with a small delay between
+// requests, and can undo the most recent batch if something went wrong.
 
-import { installAuthTokenWatcher, getCapturedToken, searchCatalog, getCsrfToken, buildLogPayload, submitLog, parseReaderSwitcher } from "../lib/beanstack-client.js";
-import { pickBestMatch } from "../lib/matcher.js";
+import {
+  installAuthTokenWatcher,
+  getCapturedToken,
+  searchCatalog,
+  getCsrfToken,
+  buildLogPayload,
+  submitLog,
+  deleteLoggedEntry,
+  parseReaderSwitcher,
+} from "../lib/beanstack-client.js";
+import { pickBestMatch, normalizeTitle } from "../lib/matcher.js";
 import { getKids, getReadingDataset, getMinMinutesThreshold, setMinMinutesThreshold } from "../lib/store.js";
-import { getSubmittedKeys, markSubmitted, isSubmitted } from "../lib/dedupe-store.js";
+import {
+  getSubmittedKeys,
+  markSubmitted,
+  unmarkSubmitted,
+  isSubmitted,
+  recordBatch,
+  getLastBatch,
+  clearLastBatch,
+} from "../lib/dedupe-store.js";
 import { splitByThreshold } from "../lib/report.js";
+import { fetchExistingLog, summarizeExistingLog } from "../lib/reading-log.js";
 
 const READER_PAIRINGS_KEY = "kb_reader_pairings"; // { [childDirectedId]: beanstackProfileId }
 
@@ -32,7 +52,7 @@ function buildPanel() {
   panel.id = "kb-beanstack-panel";
   panel.style.cssText = `
     position: fixed; top: 16px; right: 16px; z-index: 999999;
-    width: 420px; max-height: 80vh; overflow-y: auto;
+    width: 440px; max-height: 80vh; overflow-y: auto;
     background: #fff; color: #111; border: 1px solid #ccc;
     border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.25);
     font: 13px -apple-system, sans-serif; padding: 12px;
@@ -48,6 +68,9 @@ function buildPanel() {
     <div id="kb-review-table"></div>
     <button id="kb-submit-btn" style="margin-top:8px; display:none;">Submit accepted</button>
     <div id="kb-submit-status" style="font-size:12px; color:#555; margin-top:4px;"></div>
+    <hr style="margin:12px 0; border:none; border-top:1px solid #eee;">
+    <button id="kb-undo-btn">Undo last batch</button>
+    <div id="kb-undo-status" style="font-size:12px; color:#555; margin-top:4px;"></div>
   `;
   document.body.appendChild(panel);
   return panel;
@@ -131,6 +154,7 @@ async function renderPairingSection(panel) {
 }
 
 let reviewRows = []; // { entry, candidate, confidence, reason, accepted }
+let existingLogByProfile = new Map(); // profileId -> Map("date|normalizedTitle" -> {minutes, loggedBookIds})
 
 async function findMatches(panel) {
   const statusEl = panel.querySelector("#kb-review-status");
@@ -146,14 +170,9 @@ async function findMatches(panel) {
   }
 
   const threshold = await getMinMinutesThreshold();
-  const { kept: pending, excluded } = splitByThreshold(eligible, threshold);
-  const excludedMinutes = Math.round(excluded.reduce((sum, e) => sum + e.minutes, 0));
-  const excludedNote = excluded.length
-    ? ` (skipped ${excluded.length} entr${excluded.length === 1 ? "y" : "ies"} under ${threshold} min, ${excludedMinutes} min total)`
-    : "";
-
-  if (pending.length === 0) {
-    statusEl.textContent = `Nothing to review above the ${threshold}-minute threshold${excludedNote}.`;
+  const { kept: afterThreshold, excluded: belowThreshold } = splitByThreshold(eligible, threshold);
+  if (afterThreshold.length === 0) {
+    statusEl.textContent = `Nothing above the ${threshold}-minute threshold (${belowThreshold.length} skipped).`;
     return;
   }
 
@@ -162,11 +181,58 @@ async function findMatches(panel) {
     return;
   }
 
+  // Reconcile against what Beanstack already has, per profile, so this is
+  // safe to re-run even if local storage was cleared/reinstalled — the
+  // check is against server truth, not just our own memory (see README).
+  // Keyed on (date, title) alone, not amount: this assumes the tool is the
+  // only thing logging reading for these readers, so any existing entry
+  // for that day/book — regardless of its minutes — means it's covered.
+  // If that assumption doesn't hold for you (you also log manually), a
+  // manual entry for the same book/day will cause this to skip Amazon's
+  // (likely larger) total rather than adding to it.
+  statusEl.textContent = "Checking what's already logged…";
+  existingLogByProfile = new Map();
+  const profileIds = [...new Set(afterThreshold.map((e) => pairings[e.childDirectedId]))];
+  const dates = afterThreshold.map((e) => e.date).sort();
+  const dateRange = { startDate: dates[0], endDate: dates[dates.length - 1] };
+  for (const profileId of profileIds) {
+    const existing = await fetchExistingLog(profileId, dateRange);
+    existingLogByProfile.set(profileId, summarizeExistingLog(existing, normalizeTitle));
+  }
+
+  const alreadyCovered = [];
+  const toMatch = [];
+  for (const entry of afterThreshold) {
+    const profileId = pairings[entry.childDirectedId];
+    const key = `${entry.date}|${normalizeTitle(entry.title)}`;
+    if (existingLogByProfile.get(profileId)?.has(key)) {
+      alreadyCovered.push(entry);
+    } else {
+      toMatch.push(entry);
+    }
+  }
+  if (alreadyCovered.length) await markSubmitted(alreadyCovered); // genuinely already there — remember locally too
+
+  const skippedNote = [
+    belowThreshold.length ? `${belowThreshold.length} under ${threshold} min` : null,
+    alreadyCovered.length ? `${alreadyCovered.length} already logged` : null,
+  ]
+    .filter(Boolean)
+    .join(", ");
+  const skippedSuffix = skippedNote ? ` (skipped: ${skippedNote})` : "";
+
+  if (toMatch.length === 0) {
+    statusEl.textContent = `Nothing new to review${skippedSuffix}.`;
+    reviewRows = [];
+    renderReviewTable(panel);
+    return;
+  }
+
   reviewRows = [];
   const kidByChildId = new Map(kids.map((k) => [k.childDirectedId, k.name]));
-  for (let i = 0; i < pending.length; i++) {
-    const entry = pending[i];
-    statusEl.textContent = `Searching Beanstack's catalog (${i + 1}/${pending.length})…`;
+  for (let i = 0; i < toMatch.length; i++) {
+    const entry = toMatch[i];
+    statusEl.textContent = `Searching Beanstack's catalog (${i + 1}/${toMatch.length})…`;
     let candidates = [];
     try {
       candidates = await searchCatalog({ title: entry.title, author: "", isbn: entry.isbn });
@@ -184,7 +250,7 @@ async function findMatches(panel) {
       accepted: confidence === "high" || confidence === "medium",
     });
   }
-  statusEl.textContent = `Found matches for ${reviewRows.length} entries${excludedNote}. Review below, then submit.`;
+  statusEl.textContent = `Found matches for ${reviewRows.length} entries${skippedSuffix}. Review below, then submit.`;
   renderReviewTable(panel);
 }
 
@@ -229,8 +295,13 @@ async function submitAccepted(panel) {
   const pairings = await getReaderPairings();
   const csrfToken = getCsrfToken();
   const accepted = reviewRows.filter((r) => r.accepted && r.candidate);
+  if (accepted.length === 0) {
+    statusEl.textContent = "Nothing accepted to submit.";
+    return;
+  }
+
   let successCount = 0;
-  const submittedEntries = [];
+  const submittedRows = [];
   for (let i = 0; i < accepted.length; i++) {
     const row = accepted[i];
     statusEl.textContent = `Submitting ${i + 1}/${accepted.length}…`;
@@ -244,7 +315,7 @@ async function submitAccepted(panel) {
       const resp = await submitLog(payload, { csrfToken });
       if (resp.ok) {
         successCount++;
-        submittedEntries.push(row.entry);
+        submittedRows.push(row);
       }
     } catch (err) {
       statusEl.textContent = `Stopped on error submitting "${row.entry.title}": ${err.message}`;
@@ -254,8 +325,77 @@ async function submitAccepted(panel) {
     // not a requirement of Beanstack's ToS, but cheap insurance.
     await new Promise((r) => setTimeout(r, 400 + Math.random() * 500));
   }
-  await markSubmitted(submittedEntries);
-  statusEl.textContent = `Submitted ${successCount}/${accepted.length}. Re-run "Find matches" to see what's left.`;
+
+  await markSubmitted(submittedRows.map((r) => r.entry));
+  statusEl.textContent = `Submitted ${successCount}/${accepted.length}. Resolving log IDs for undo…`;
+
+  const batchRecords = await resolveNewLoggedBookIds(submittedRows, pairings);
+  await recordBatch(batchRecords);
+  const resolvedCount = batchRecords.filter((r) => r.loggedBookId).length;
+  statusEl.textContent = `Submitted ${successCount}/${accepted.length}. ${resolvedCount}/${submittedRows.length} ready to undo if needed. Re-run "Find matches" to see what's left.`;
+}
+
+/**
+ * The create response carries no ID (verified live — see beanstack-client.js
+ * submitLog), so we learn each new entry's ID by re-reading the log after
+ * submitting and finding, per (profile, date, title), whichever ID wasn't
+ * there in the pre-submit snapshot already captured by findMatches.
+ */
+async function resolveNewLoggedBookIds(submittedRows, pairings) {
+  const byProfile = new Map();
+  for (const row of submittedRows) {
+    const profileId = pairings[row.entry.childDirectedId];
+    if (!byProfile.has(profileId)) byProfile.set(profileId, []);
+    byProfile.get(profileId).push(row);
+  }
+
+  const records = [];
+  for (const [profileId, rows] of byProfile) {
+    const dates = rows.map((r) => r.entry.date).sort();
+    const existingAfter = await fetchExistingLog(profileId, { startDate: dates[0], endDate: dates[dates.length - 1] });
+    const afterSummary = summarizeExistingLog(existingAfter, normalizeTitle);
+    const beforeSummary = existingLogByProfile.get(profileId);
+
+    for (const row of rows) {
+      const key = `${row.entry.date}|${normalizeTitle(row.entry.title)}`;
+      const beforeIds = new Set(beforeSummary?.get(key)?.loggedBookIds ?? []);
+      const afterIds = afterSummary.get(key)?.loggedBookIds ?? [];
+      const newId = afterIds.find((id) => !beforeIds.has(id)) ?? null;
+      records.push({ entry: row.entry, loggedBookId: newId });
+    }
+  }
+  return records;
+}
+
+async function undoLastBatch(panel) {
+  const statusEl = panel.querySelector("#kb-undo-status");
+  const batch = await getLastBatch();
+  if (batch.length === 0) {
+    statusEl.textContent = "Nothing to undo.";
+    return;
+  }
+  const csrfToken = getCsrfToken();
+  let undone = 0;
+  const undoneEntries = [];
+  for (let i = 0; i < batch.length; i++) {
+    const { entry, loggedBookId } = batch[i];
+    if (!loggedBookId) continue; // couldn't resolve an ID for this one — leave it, don't guess
+    statusEl.textContent = `Undoing ${i + 1}/${batch.length}…`;
+    try {
+      const resp = await deleteLoggedEntry(loggedBookId, { csrfToken });
+      if (resp.ok) {
+        undone++;
+        undoneEntries.push(entry);
+      }
+    } catch (err) {
+      statusEl.textContent = `Stopped on error undoing "${entry.title}": ${err.message}`;
+      break;
+    }
+    await new Promise((r) => setTimeout(r, 400 + Math.random() * 500));
+  }
+  await unmarkSubmitted(undoneEntries);
+  await clearLastBatch();
+  statusEl.textContent = `Undid ${undone}/${batch.length}. Those entries are eligible to review and submit again.`;
 }
 
 async function init() {
@@ -279,6 +419,11 @@ async function init() {
   panel.querySelector("#kb-submit-btn").addEventListener("click", () => {
     submitAccepted(panel).catch((err) => {
       panel.querySelector("#kb-submit-status").textContent = `Error: ${err.message}`;
+    });
+  });
+  panel.querySelector("#kb-undo-btn").addEventListener("click", () => {
+    undoLastBatch(panel).catch((err) => {
+      panel.querySelector("#kb-undo-status").textContent = `Error: ${err.message}`;
     });
   });
 }

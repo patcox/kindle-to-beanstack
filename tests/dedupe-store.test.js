@@ -1,6 +1,14 @@
 import { test, beforeEach } from "node:test";
 import assert from "node:assert/strict";
-import { getSubmittedKeys, markSubmitted, isSubmitted } from "../extension/lib/dedupe-store.js";
+import {
+  getSubmittedKeys,
+  markSubmitted,
+  unmarkSubmitted,
+  isSubmitted,
+  recordBatch,
+  getLastBatch,
+  clearLastBatch,
+} from "../extension/lib/dedupe-store.js";
 
 function installMockChromeStorage() {
   const data = {};
@@ -35,4 +43,31 @@ test("markSubmitted then isSubmitted reflects marked entries", async () => {
   const set = await getSubmittedKeys();
   assert.equal(isSubmitted(set, entry), true);
   assert.equal(isSubmitted(set, other), false);
+});
+
+test("unmarkSubmitted removes an entry so it becomes eligible again", async () => {
+  const entry = { childDirectedId: "c1", date: "2026-07-01", asin: "B1" };
+  await markSubmitted([entry]);
+  assert.equal(isSubmitted(await getSubmittedKeys(), entry), true);
+  await unmarkSubmitted([entry]);
+  assert.equal(isSubmitted(await getSubmittedKeys(), entry), false);
+});
+
+test("getLastBatch starts empty", async () => {
+  assert.deepEqual(await getLastBatch(), []);
+});
+
+test("recordBatch/getLastBatch round-trip, and a new batch replaces the old one", async () => {
+  const batch1 = [{ entry: { title: "A" }, loggedBookId: "1" }];
+  const batch2 = [{ entry: { title: "B" }, loggedBookId: "2" }];
+  await recordBatch(batch1);
+  assert.deepEqual(await getLastBatch(), batch1);
+  await recordBatch(batch2);
+  assert.deepEqual(await getLastBatch(), batch2);
+});
+
+test("clearLastBatch empties the recorded batch", async () => {
+  await recordBatch([{ entry: { title: "A" }, loggedBookId: "1" }]);
+  await clearLastBatch();
+  assert.deepEqual(await getLastBatch(), []);
 });
