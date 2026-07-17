@@ -30,6 +30,7 @@
 (async () => {
   const { fetchActivity, fetchIsbnForAsin } = await import(chrome.runtime.getURL("lib/amazon-client.js"));
   const { getKids, addOrUpdateKid, removeKid, mergeReadingDataset } = await import(chrome.runtime.getURL("lib/store.js"));
+  const { wirePanelChrome } = await import(chrome.runtime.getURL("lib/panel-chrome.js"));
 
   function todayISO() {
     return new Date().toISOString().slice(0, 10);
@@ -52,30 +53,38 @@
       position: fixed; top: 16px; right: 16px; z-index: 999999;
       width: 320px; background: #fff; color: #111; border: 1px solid #ccc;
       border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.25);
-      font: 13px -apple-system, sans-serif; padding: 12px;
+      font: 13px -apple-system, sans-serif;
     `;
     panel.innerHTML = `
-      <div style="font-weight:600; margin-bottom:8px;">Kindle → Beanstack</div>
-
-      <div style="margin-bottom:10px;">
-        <div style="font-weight:600; font-size:12px; color:#555;">1. Kids</div>
-        <button id="kb-detect-btn" style="margin-top:4px;">Detect kids</button>
-        <div id="kb-detect-status" style="font-size:12px; color:#555; margin-top:4px;"></div>
-        <ul id="kb-kids-list" style="margin:6px 0 0; padding-left:18px;"></ul>
+      <div data-kb-role="header" style="cursor:move; user-select:none; display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-bottom:1px solid #eee; font-weight:600;">
+        <span>Kindle → Beanstack</span>
+        <span>
+          <button type="button" data-kb-role="minimize" title="Minimize" style="width:22px; height:22px; line-height:1; padding:0;">–</button>
+          <button type="button" data-kb-role="close" title="Close" style="width:22px; height:22px; line-height:1; padding:0; margin-left:4px;">×</button>
+        </span>
       </div>
-
-      <div>
-        <div style="font-weight:600; font-size:12px; color:#555;">2. Pull reading data</div>
-        <div style="margin-top:4px;">
-          <input type="date" id="kb-start-date" style="width:130px;">
-          &ndash;
-          <input type="date" id="kb-end-date" style="width:130px;">
+      <div data-kb-role="body" style="padding:12px;">
+        <div style="margin-bottom:10px;">
+          <div style="font-weight:600; font-size:12px; color:#555;">1. Kids</div>
+          <button id="kb-detect-btn" style="margin-top:4px;">Detect kids</button>
+          <div id="kb-detect-status" style="font-size:12px; color:#555; margin-top:4px;"></div>
+          <ul id="kb-kids-list" style="margin:6px 0 0; padding-left:18px;"></ul>
         </div>
-        <button id="kb-pull-btn" style="margin-top:6px;">Pull reading data</button>
-        <div id="kb-pull-status" style="font-size:12px; color:#555; margin-top:4px;"></div>
+
+        <div>
+          <div style="font-weight:600; font-size:12px; color:#555;">2. Pull reading data</div>
+          <div style="margin-top:4px;">
+            <input type="date" id="kb-start-date" style="width:130px;">
+            &ndash;
+            <input type="date" id="kb-end-date" style="width:130px;">
+          </div>
+          <button id="kb-pull-btn" style="margin-top:6px;">Pull reading data</button>
+          <div id="kb-pull-status" style="font-size:12px; color:#555; margin-top:4px;"></div>
+        </div>
       </div>
     `;
     document.body.appendChild(panel);
+    wirePanelChrome(panel, { reopenLabel: "K→Beanstack" });
     return panel;
   }
 

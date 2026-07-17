@@ -101,7 +101,10 @@ rather than silently dropped.
 2. Open your Amazon Parent Dashboard. A floating panel appears — click
    "Detect kids" once; it fetches every kid in the household (name and
    ID together) in a single request, no clicking through profile icons or
-   typing names required.
+   typing names required. The panel's header can be dragged anywhere on the
+   page, and has `–`/`×` buttons to minimize or close it (a small "K→…"
+   button reopens it) if it's sitting over page content you need, like
+   Beanstack's own reader switcher.
 3. Open your library's Beanstack site — the panel there auto-detects every
    family reader's `profile_id` directly from the page's own reader-switcher
    (no dev tools, no clicking through each reader) and auto-pairs them with
@@ -143,6 +146,13 @@ rather than silently dropped.
   page) narrows it, but different printings of the same book can have
   different ISBNs. Always review matches before submitting — don't trust
   auto-matching blindly, especially for a large backlog.
+- **Beanstack's catalog search rejects some unusual titles outright** (HTTP
+  400 — seen live for a multi-book bundle listing's Amazon title, which
+  runs long and packs in several book titles at once). One entry's search
+  failing shows up as a "search failed" row rather than blocking every
+  other entry after it, but that title still will not get logged
+  automatically — use "Manually Enter Title" on Beanstack directly for
+  those.
 - **`program_id` behavior for kids in 2+ simultaneous Beanstack challenges is
   still unverified** — confirmed working (live, real submission) when
   omitted entirely for a reader with exactly one active challenge; untested

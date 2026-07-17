@@ -33,6 +33,7 @@
     await import(chrome.runtime.getURL("lib/dedupe-store.js"));
   const { splitByThreshold } = await import(chrome.runtime.getURL("lib/report.js"));
   const { fetchExistingLog, summarizeExistingLog } = await import(chrome.runtime.getURL("lib/reading-log.js"));
+  const { wirePanelChrome } = await import(chrome.runtime.getURL("lib/panel-chrome.js"));
 
   const READER_PAIRINGS_KEY = "kb_reader_pairings"; // { [childDirectedId]: beanstackProfileId }
 
@@ -56,27 +57,36 @@
     panel.id = "kb-beanstack-panel";
     panel.style.cssText = `
       position: fixed; top: 16px; right: 16px; z-index: 999999;
-      width: 440px; max-height: 80vh; overflow-y: auto;
+      width: 440px; max-height: 80vh; overflow: hidden;
       background: #fff; color: #111; border: 1px solid #ccc;
       border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.25);
-      font: 13px -apple-system, sans-serif; padding: 12px;
+      font: 13px -apple-system, sans-serif;
     `;
     panel.innerHTML = `
-      <div style="font-weight:600; margin-bottom:8px;">Kindle → Beanstack: Review &amp; Log</div>
-      <div id="kb-pairing-section"></div>
-      <div style="margin-top:8px;">
-        Skip entries under <input type="number" id="kb-threshold-input" min="0" step="1" style="width:50px;"> minutes
+      <div data-kb-role="header" style="cursor:move; user-select:none; display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-bottom:1px solid #eee; font-weight:600;">
+        <span>Kindle → Beanstack: Review &amp; Log</span>
+        <span>
+          <button type="button" data-kb-role="minimize" title="Minimize" style="width:22px; height:22px; line-height:1; padding:0;">–</button>
+          <button type="button" data-kb-role="close" title="Close" style="width:22px; height:22px; line-height:1; padding:0; margin-left:4px;">×</button>
+        </span>
       </div>
-      <button id="kb-review-btn" style="margin-top:8px;">Find matches to review</button>
-      <div id="kb-review-status" style="font-size:12px; color:#555; margin-top:4px;"></div>
-      <div id="kb-review-table"></div>
-      <button id="kb-submit-btn" style="margin-top:8px; display:none;">Submit accepted</button>
-      <div id="kb-submit-status" style="font-size:12px; color:#555; margin-top:4px;"></div>
-      <hr style="margin:12px 0; border:none; border-top:1px solid #eee;">
-      <button id="kb-undo-btn">Undo last batch</button>
-      <div id="kb-undo-status" style="font-size:12px; color:#555; margin-top:4px;"></div>
+      <div data-kb-role="body" style="padding:12px; max-height:calc(80vh - 39px); overflow-y:auto;">
+        <div id="kb-pairing-section"></div>
+        <div style="margin-top:8px;">
+          Skip entries under <input type="number" id="kb-threshold-input" min="0" step="1" style="width:50px;"> minutes
+        </div>
+        <button id="kb-review-btn" style="margin-top:8px;">Find matches to review</button>
+        <div id="kb-review-status" style="font-size:12px; color:#555; margin-top:4px;"></div>
+        <div id="kb-review-table"></div>
+        <button id="kb-submit-btn" style="margin-top:8px; display:none;">Submit accepted</button>
+        <div id="kb-submit-status" style="font-size:12px; color:#555; margin-top:4px;"></div>
+        <hr style="margin:12px 0; border:none; border-top:1px solid #eee;">
+        <button id="kb-undo-btn">Undo last batch</button>
+        <div id="kb-undo-status" style="font-size:12px; color:#555; margin-top:4px;"></div>
+      </div>
     `;
     document.body.appendChild(panel);
+    wirePanelChrome(panel, { reopenLabel: "K→Beanstack" });
     return panel;
   }
 
@@ -234,6 +244,7 @@
 
     reviewRows = [];
     const kidByChildId = new Map(kids.map((k) => [k.childDirectedId, k.name]));
+    const searchFailures = [];
     for (let i = 0; i < toMatch.length; i++) {
       const entry = toMatch[i];
       statusEl.textContent = `Searching Beanstack's catalog (${i + 1}/${toMatch.length})…`;
@@ -241,8 +252,20 @@
       try {
         candidates = await searchCatalog({ title: entry.title, author: "", isbn: entry.isbn });
       } catch (err) {
-        statusEl.textContent = `Error searching for "${entry.title}": ${err.message}`;
-        return;
+        // One title's search failing (Beanstack has rejected some unusual
+        // titles, e.g. multi-book bundle listings, with a 400) shouldn't
+        // block every other entry after it — show it as a failed/no-match
+        // row instead of aborting the whole batch.
+        searchFailures.push(`${entry.title}: ${err.message}`);
+        reviewRows.push({
+          entry,
+          kidName: kidByChildId.get(entry.childDirectedId) ?? entry.childDirectedId,
+          candidate: null,
+          confidence: "none",
+          reason: `search failed: ${err.message}`,
+          accepted: false,
+        });
+        continue;
       }
       const { candidate, confidence, reason } = pickBestMatch({ candidates, queryTitle: entry.title, queryIsbn: entry.isbn });
       reviewRows.push({
@@ -254,7 +277,8 @@
         accepted: confidence === "high" || confidence === "medium",
       });
     }
-    statusEl.textContent = `Found matches for ${reviewRows.length} entries${skippedSuffix}. Review below, then submit.`;
+    const failureSuffix = searchFailures.length ? ` (${searchFailures.length} search failed — see table)` : "";
+    statusEl.textContent = `Found matches for ${reviewRows.length} entries${skippedSuffix}${failureSuffix}. Review below, then submit.`;
     renderReviewTable(panel);
   }
 
