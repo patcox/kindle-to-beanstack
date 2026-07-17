@@ -69,12 +69,11 @@ rather than silently dropped.
    one at a time; the panel will ask you to name each one as it's detected
    (this is network-based, not a guess at Amazon's DOM structure, so it's
    more resilient to Amazon changing their page).
-3. Find each kid's Beanstack `profile_id`: open "Log Reading" on Beanstack
-   while that reader is selected, pick any book, and look at the URL/page —
-   or just check your browser's Network tab for a `logged_book[profile_id]`
-   value. Enter it in the pairing box in the Beanstack-side panel. (A future
-   version could auto-detect this the same way Amazon detection works; v1
-   asks you to enter it once per kid.)
+3. Open your library's Beanstack site — the panel there auto-detects every
+   family reader's `profile_id` directly from the page's own reader-switcher
+   (no dev tools, no clicking through each reader) and auto-pairs them with
+   your Amazon kids by matching names. If a name doesn't match exactly, fix
+   the pairing with the dropdown next to that kid.
 4. On the Parent Dashboard, use the floating panel to pull a date range of
    reading activity.
 5. On Beanstack, open "Log Reading" and search for any title once — this

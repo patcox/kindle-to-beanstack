@@ -4,7 +4,7 @@
 // override before anything is sent, then submits the accepted rows one at a
 // time with a small delay between requests.
 
-import { installAuthTokenWatcher, getCapturedToken, searchCatalog, getCsrfToken, buildLogPayload, submitLog } from "../lib/beanstack-client.js";
+import { installAuthTokenWatcher, getCapturedToken, searchCatalog, getCsrfToken, buildLogPayload, submitLog, parseReaderSwitcher } from "../lib/beanstack-client.js";
 import { pickBestMatch } from "../lib/matcher.js";
 import { getKids, getReadingDataset, getMinMinutesThreshold, setMinMinutesThreshold } from "../lib/store.js";
 import { getSubmittedKeys, markSubmitted, isSubmitted } from "../lib/dedupe-store.js";
@@ -53,39 +53,82 @@ function buildPanel() {
   return panel;
 }
 
+/**
+ * Reads every reader straight off the page (see parseReaderSwitcher) and
+ * auto-pairs any Amazon kid whose name matches a Beanstack reader's name
+ * exactly (case-insensitive) that isn't already paired. Manual correction
+ * is still available via the dropdown for names that don't line up.
+ */
+async function autoPairByName(kids, readers) {
+  const pairings = await getReaderPairings();
+  const readerByName = new Map(readers.map((r) => [r.name.trim().toLowerCase(), r]));
+  for (const kid of kids) {
+    if (pairings[kid.childDirectedId]) continue;
+    const match = readerByName.get(kid.name.trim().toLowerCase());
+    if (match) await setReaderPairing(kid.childDirectedId, match.profileId);
+  }
+}
+
 async function renderPairingSection(panel) {
   const kids = await getKids();
-  const pairings = await getReaderPairings();
   const section = panel.querySelector("#kb-pairing-section");
   if (kids.length === 0) {
     section.innerHTML = `<div style="color:#888;">No kids configured yet — set those up from the panel on your Amazon Parent Dashboard first.</div>`;
     return;
   }
+
+  const readers = parseReaderSwitcher();
+  await autoPairByName(kids, readers);
+  const pairings = await getReaderPairings();
+
+  if (readers.length === 0) {
+    // Fallback for the rare case the reader-switcher isn't on this page
+    // (e.g. a single-reader account with no switcher at all).
+    section.innerHTML = `
+      <div style="font-weight:600; font-size:12px; color:#555;">Pair each kid with their Beanstack profile ID</div>
+      <div style="color:#888; font-size:12px;">Couldn't auto-detect readers on this page — enter profile_id manually.</div>
+      ${kids
+        .map(
+          (k) => `
+        <div style="margin-top:4px;">
+          ${escapeHtml(k.name)}:
+          <input type="text" data-child-id="${escapeHtml(k.childDirectedId)}" class="kb-pairing-input"
+                 placeholder="Beanstack profile_id" value="${escapeHtml(pairings[k.childDirectedId] ?? "")}"
+                 style="width:140px;">
+        </div>`
+        )
+        .join("")}
+    `;
+    section.querySelectorAll(".kb-pairing-input").forEach((input) => {
+      input.addEventListener("change", () => setReaderPairing(input.dataset.childId, input.value.trim()));
+    });
+    return;
+  }
+
   section.innerHTML = `
-    <div style="font-weight:600; font-size:12px; color:#555;">Pair each kid with their Beanstack profile ID</div>
+    <div style="font-weight:600; font-size:12px; color:#555;">Kid ↔ Beanstack reader (auto-detected, matched by name — override below)</div>
     ${kids
       .map(
         (k) => `
       <div style="margin-top:4px;">
         ${escapeHtml(k.name)}:
-        <input type="text" data-child-id="${escapeHtml(k.childDirectedId)}" class="kb-pairing-input"
-               placeholder="Beanstack profile_id" value="${escapeHtml(pairings[k.childDirectedId] ?? "")}"
-               style="width:140px;">
+        <select data-child-id="${escapeHtml(k.childDirectedId)}" class="kb-pairing-select">
+          <option value="">(none)</option>
+          ${readers
+            .map(
+              (r) =>
+                `<option value="${escapeHtml(r.profileId)}" ${pairings[k.childDirectedId] === r.profileId ? "selected" : ""}>${escapeHtml(r.name)}</option>`
+            )
+            .join("")}
+        </select>
       </div>`
       )
       .join("")}
   `;
-  section.querySelectorAll(".kb-pairing-input").forEach((input) => {
-    input.addEventListener("change", () => setReaderPairing(input.dataset.childId, input.value.trim()));
+  section.querySelectorAll(".kb-pairing-select").forEach((select) => {
+    select.addEventListener("change", () => setReaderPairing(select.dataset.childId, select.value));
   });
 }
-
-/**
- * Finding the Beanstack profile_id for a reader requires opening the
- * "Log Reading" flow once while that reader is selected (see README) — it's
- * not readable from the dashboard page alone. This panel just stores
- * whatever you enter rather than trying to auto-detect it here.
- */
 
 let reviewRows = []; // { entry, candidate, confidence, reason, accepted }
 

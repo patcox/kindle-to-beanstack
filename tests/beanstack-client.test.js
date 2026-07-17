@@ -11,6 +11,7 @@ import {
   getCsrfToken,
   buildLogPayload,
   submitLog,
+  parseReaderSwitcher,
 } from "../extension/lib/beanstack-client.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -77,6 +78,32 @@ test("getCsrfToken reads the meta tag content", () => {
   assert.equal(getCsrfToken(fakeDoc), "abc123");
   const emptyDoc = { querySelector: () => null };
   assert.equal(getCsrfToken(emptyDoc), null);
+});
+
+function fakeLink(href, text) {
+  return { getAttribute: (name) => (name === "href" ? href : null), textContent: text };
+}
+
+test("parseReaderSwitcher extracts profileId + name from the switcher list", () => {
+  const fakeDoc = {
+    querySelectorAll: () => [
+      fakeLink("/user/77777001/profiles/99999001/set_active_profile", "Alex"),
+      fakeLink("/user/77777001/profiles/99999002/set_active_profile", "Sam"),
+      fakeLink("/user/77777001/profiles/99999003/set_active_profile", "Jordan"),
+    ],
+  };
+  assert.deepEqual(parseReaderSwitcher(fakeDoc), [
+    { profileId: "99999001", name: "Alex" },
+    { profileId: "99999002", name: "Sam" },
+    { profileId: "99999003", name: "Jordan" },
+  ]);
+});
+
+test("parseReaderSwitcher skips links that don't match the expected href shape", () => {
+  const fakeDoc = {
+    querySelectorAll: () => [fakeLink("/profiles/new", "Add a Reader"), fakeLink(null, "broken")],
+  };
+  assert.deepEqual(parseReaderSwitcher(fakeDoc), []);
 });
 
 test("buildLogPayload maps a chosen candidate into the expected form fields", async () => {

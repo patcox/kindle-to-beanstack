@@ -93,6 +93,25 @@ export function getCsrfToken(doc = document) {
 }
 
 /**
+ * Reads every family reader's profile_id straight out of the page's
+ * reader-switcher, which lists all of them (not just the active one) as
+ * `<a href="/user/{userId}/profiles/{profileId}/set_active_profile">{Name}</a>`
+ * — present in the DOM on any Beanstack page, no click/navigation needed.
+ * No dev tools, no manual ID hunting. Pure given a document.
+ * @returns {{profileId: string, name: string}[]}
+ */
+export function parseReaderSwitcher(doc = document) {
+  const links = doc.querySelectorAll('.profile-switcher-list a[href*="set_active_profile"]');
+  const readers = [];
+  for (const link of links) {
+    const match = (link.getAttribute("href") || "").match(/profiles\/(\d+)\/set_active_profile/);
+    if (!match) continue;
+    readers.push({ profileId: match[1], name: link.textContent.trim() });
+  }
+  return readers;
+}
+
+/**
  * Pure. Builds the logged_books form payload from a chosen catalog match.
  * `minutes` must be a whole number of minutes (Beanstack's own UI parses
  * "1h 55m" into 115 client-side before submitting — we skip that step and
