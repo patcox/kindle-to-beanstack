@@ -164,21 +164,3 @@ export async function submitLog(payload, { csrfToken, baseUrl = location.origin,
   });
   return resp;
 }
-
-/**
- * Deletes one previously-created log entry, given the Beanstack ID
- * returned by reading-log.js's fetchExistingLog (the create response
- * itself carries no ID — see submitLog). Mirrors the real "Delete" button's
- * own request exactly (verified live): a Rails method-override POST, not a
- * real HTTP DELETE. Inject `fetchImpl` in tests.
- */
-export async function deleteLoggedEntry(loggedBookId, { csrfToken, baseUrl = location.origin, fetchImpl = fetch } = {}) {
-  if (!csrfToken) throw new Error("csrfToken is required");
-  const body = new URLSearchParams({ _method: "delete", authenticity_token: csrfToken });
-  const resp = await fetchImpl(`${baseUrl}${SUBMIT_ENDPOINT_PATH}/${loggedBookId}`, {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: body.toString(),
-  });
-  return resp;
-}

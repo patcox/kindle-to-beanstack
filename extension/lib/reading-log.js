@@ -1,9 +1,7 @@
 // Reads a reader's *existing* Beanstack log (the dated_reading_log page,
 // one month at a time) so we can check what's already there before
 // submitting anything new. This is what makes submission idempotent against
-// server truth rather than just our own local memory (see README) — and,
-// as a side effect, it's also how we learn each entry's Beanstack ID for
-// cleanup/undo, since the create endpoint's response doesn't include one.
+// server truth rather than just our own local memory (see README).
 
 const MONTH_NAMES = {
   january: 1, february: 2, march: 3, april: 4, may: 5, june: 6,
@@ -87,11 +85,12 @@ export async function fetchExistingLog(
   const months = monthsBetween(startDate, endDate);
   const all = [];
   for (const { year, month } of months) {
-    // Undo relies on re-fetching this exact same URL again right after a
-    // submission (see resolveNewLoggedBookIds) to see what changed — a
-    // normal cached "default" fetch can serve the browser's HTTP cache
-    // instead of hitting the network, silently returning the pre-submit
-    // snapshot again. `no-store` forces a real round-trip every time.
+    // findMatches can call this again for the same URL shortly after a
+    // previous check (e.g. re-running "Find matches" right after a submit)
+    // — a normal cached "default" fetch can serve the browser's HTTP cache
+    // instead of hitting the network, returning a stale snapshot. `no-store`
+    // forces a real round-trip every time, since this always needs to
+    // reflect current server truth (see module comment above).
     const resp = await fetchImpl(buildMonthLogUrl(profileId, year, month), { cache: "no-store" });
     if (!resp.ok) continue; // a month with no data can still 200; only skip real failures
     const html = await resp.text();

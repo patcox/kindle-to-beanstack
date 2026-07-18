@@ -3,8 +3,14 @@
 // logged (so re-running this is idempotent even if local storage gets
 // wiped — see reading-log.js), searches Beanstack's catalog for anything
 // new, shows a review table you approve or override before anything is
-// sent, submits the accepted rows one at a time with a small delay between
-// requests, and can undo the most recent batch if something went wrong.
+// sent, and submits the accepted rows one at a time with a small delay
+// between requests. After submitting, the panel lists exactly what was
+// logged (kid, date, title) so a mistake can be found and deleted by hand
+// on Beanstack — an earlier automated "Undo last batch" (diffing the log
+// before/after to learn each new entry's id, since the create response
+// carries none) was removed after live testing at real scale (142
+// entries) showed it only resolving a handful of ids reliably; a simple,
+// always-accurate list beats a mostly-broken automation here.
 //
 // Chrome's manifest.json content_scripts array has no way to declare a
 // script as an ES module (that's only supported for content scripts
@@ -22,15 +28,13 @@
     getCsrfToken,
     buildLogPayload,
     submitLog,
-    deleteLoggedEntry,
     parseReaderSwitcher,
   } = await import(chrome.runtime.getURL("lib/beanstack-client.js"));
   const { pickBestMatch, normalizeTitle, simplifyTitleForSearch } = await import(chrome.runtime.getURL("lib/matcher.js"));
   const { getKids, getReadingDataset, getMinMinutesThreshold, setMinMinutesThreshold } = await import(
     chrome.runtime.getURL("lib/store.js")
   );
-  const { getSubmittedKeys, markSubmitted, unmarkSubmitted, isSubmitted, recordBatch, getLastBatch, clearLastBatch } =
-    await import(chrome.runtime.getURL("lib/dedupe-store.js"));
+  const { getSubmittedKeys, markSubmitted, isSubmitted } = await import(chrome.runtime.getURL("lib/dedupe-store.js"));
   const { splitByThreshold } = await import(chrome.runtime.getURL("lib/report.js"));
   const { fetchExistingLog, summarizeExistingLog } = await import(chrome.runtime.getURL("lib/reading-log.js"));
   const { wirePanelChrome } = await import(chrome.runtime.getURL("lib/panel-chrome.js"));
@@ -79,9 +83,7 @@
         <div id="kb-review-table"></div>
         <button id="kb-submit-btn" style="margin-top:8px; display:none;">Submit accepted</button>
         <div id="kb-submit-status" style="font-size:12px; color:#555; margin-top:4px;"></div>
-        <hr style="margin:12px 0; border:none; border-top:1px solid #eee;">
-        <button id="kb-undo-btn">Undo last batch</button>
-        <div id="kb-undo-status" style="font-size:12px; color:#555; margin-top:4px;"></div>
+        <div id="kb-submit-list"></div>
       </div>
     `;
     document.body.appendChild(panel);
@@ -470,106 +472,32 @@
 
     await markSubmitted(submittedRows.map((r) => r.entry));
     const failureNote = submitFailures.length ? ` Failed: ${submitFailures.join("; ")}.` : "";
-    statusEl.textContent = `Submitted ${successCount}/${accepted.length}.${failureNote} Resolving log IDs for undo…`;
-
-    const batchRecords = await resolveNewLoggedBookIds(submittedRows, pairings);
-    await recordBatch(batchRecords);
-    const resolvedCount = batchRecords.filter((r) => r.loggedBookId).length;
-    const unresolved = batchRecords.filter((r) => !r.loggedBookId);
-    const unresolvedPreview = unresolved
-      .slice(0, 5)
-      .map((r) => `${r.entry.date} "${r.entry.title}"`)
-      .join("; ");
-    const unresolvedNote = unresolved.length
-      ? ` Unresolved: ${unresolvedPreview}${unresolved.length > 5 ? ` (+${unresolved.length - 5} more)` : ""}.`
-      : "";
-    statusEl.textContent = `Submitted ${successCount}/${accepted.length}.${failureNote} ${resolvedCount}/${submittedRows.length} ready to undo if needed.${unresolvedNote} Re-run "Find matches" to see what's left.`;
+    statusEl.textContent = `Submitted ${successCount}/${accepted.length}.${failureNote}`;
+    renderSubmittedList(panel, submittedRows);
   }
 
   /**
-   * The create response carries no ID (verified live — see beanstack-client.js
-   * submitLog), so we learn each new entry's ID by re-reading the log after
-   * submitting and finding, per (profile, date, title), whichever ID wasn't
-   * there in the pre-submit snapshot already captured by findMatches.
-   *
-   * Live testing first saw this under-resolve (3/6), then — after adding a
-   * settle delay that didn't help — resolve nothing at all (0/3). That
-   * points at the browser's own HTTP cache, not server-side lag: this
-   * re-read hits the *exact same URL* findMatches already fetched moments
-   * earlier, and a plain fetch() is happy to serve that from cache instead
-   * of the network. Fixed at the source (see reading-log.js's `no-store`)
-   * rather than with more delay.
+   * Plain confirmation list of what this batch actually logged — no
+   * Beanstack ID lookups involved, so it's always accurate (unlike the
+   * removed undo feature, which depended on diffing the log before/after
+   * to guess each new entry's id and only worked reliably at small scale).
+   * If something needs fixing, find it here by kid/date/title and delete
+   * it directly on Beanstack.
    */
-  async function resolveNewLoggedBookIds(submittedRows, pairings) {
-    const byProfile = new Map();
-    for (const row of submittedRows) {
-      const profileId = pairings[row.entry.childDirectedId];
-      if (!byProfile.has(profileId)) byProfile.set(profileId, []);
-      byProfile.get(profileId).push(row);
-    }
-
-    const records = [];
-    for (const [profileId, rows] of byProfile) {
-      const dates = rows.map((r) => r.entry.date).sort();
-      const existingAfter = await fetchExistingLog(profileId, { startDate: dates[0], endDate: dates[dates.length - 1] });
-      const afterSummary = summarizeExistingLog(existingAfter, normalizeTitle);
-      const beforeSummary = existingLogByProfile.get(profileId);
-
-      // Two rows in the same batch can land on the same (date, title) key —
-      // e.g. two separate Amazon entries for the same book on the same day.
-      // Without tracking claims, both would independently pick the same
-      // "first new id", silently duplicating one row's id onto another
-      // while a real new id for the second row goes unclaimed.
-      const claimedByKey = new Map();
-      for (const row of rows) {
-        // Keyed on what was actually submitted (candidate.title or the
-        // manually-typed title), not the original Amazon title — those can
-        // differ (a fuzzy catalog match, or an edited manual entry), and
-        // Beanstack's own log always shows the submitted title.
-        const key = `${row.entry.date}|${normalizeTitle(submittedTitle(row))}`;
-        const beforeIds = new Set(beforeSummary?.get(key)?.loggedBookIds ?? []);
-        const afterIds = afterSummary.get(key)?.loggedBookIds ?? [];
-        const claimed = claimedByKey.get(key) ?? new Set();
-        const newId = afterIds.find((id) => !beforeIds.has(id) && !claimed.has(id)) ?? null;
-        if (newId) {
-          claimed.add(newId);
-          claimedByKey.set(key, claimed);
-        }
-        records.push({ entry: row.entry, loggedBookId: newId });
-      }
-    }
-    return records;
-  }
-
-  async function undoLastBatch(panel) {
-    const statusEl = panel.querySelector("#kb-undo-status");
-    const batch = await getLastBatch();
-    if (batch.length === 0) {
-      statusEl.textContent = "Nothing to undo.";
+  function renderSubmittedList(panel, rows) {
+    const container = panel.querySelector("#kb-submit-list");
+    if (!rows.length) {
+      container.innerHTML = "";
       return;
     }
-    const csrfToken = getCsrfToken();
-    let undone = 0;
-    const undoneEntries = [];
-    for (let i = 0; i < batch.length; i++) {
-      const { entry, loggedBookId } = batch[i];
-      if (!loggedBookId) continue; // couldn't resolve an ID for this one — leave it, don't guess
-      statusEl.textContent = `Undoing ${i + 1}/${batch.length}…`;
-      try {
-        const resp = await deleteLoggedEntry(loggedBookId, { csrfToken });
-        if (resp.ok) {
-          undone++;
-          undoneEntries.push(entry);
-        }
-      } catch (err) {
-        statusEl.textContent = `Stopped on error undoing "${entry.title}": ${err.message}`;
-        break;
-      }
-      await new Promise((r) => setTimeout(r, 400 + Math.random() * 500));
-    }
-    await unmarkSubmitted(undoneEntries);
-    await clearLastBatch();
-    statusEl.textContent = `Undid ${undone}/${batch.length}. Those entries are eligible to review and submit again.`;
+    container.innerHTML = `
+      <div class="kb-bold" style="font-size:12px; color:#555; margin-top:6px;">Logged this batch (find/delete manually on Beanstack if something's wrong):</div>
+      <ul style="margin:4px 0 0; padding-left:18px; font-size:12px;">
+        ${rows
+          .map((r) => `<li>${escapeHtml(r.kidName)} — ${escapeHtml(r.entry.date)} — ${escapeHtml(submittedTitle(r))}</li>`)
+          .join("")}
+      </ul>
+    `;
   }
 
   async function init() {
@@ -593,11 +521,6 @@
     panel.querySelector("#kb-submit-btn").addEventListener("click", () => {
       submitAccepted(panel).catch((err) => {
         panel.querySelector("#kb-submit-status").textContent = `Error: ${err.message}`;
-      });
-    });
-    panel.querySelector("#kb-undo-btn").addEventListener("click", () => {
-      undoLastBatch(panel).catch((err) => {
-        panel.querySelector("#kb-undo-status").textContent = `Error: ${err.message}`;
       });
     });
   }

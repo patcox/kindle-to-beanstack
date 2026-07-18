@@ -68,13 +68,15 @@ This makes it safe to re-run the review panel repeatedly, including after
 reinstalling the extension or losing local storage — the check is against
 server truth, not a fragile local cache.
 
-**Undo last batch**: after each submitted batch, the panel re-reads the log
-to learn each new entry's Beanstack ID (the create response doesn't include
-one) and remembers them. "Undo last batch" deletes exactly those entries —
-using the same request Beanstack's own "Delete" button makes (verified
-live) — and un-marks them locally so they're eligible to review and submit
-again. Only the most recently submitted batch is undo-able this way; for
-anything older, delete manually from Beanstack's reading log.
+**Fixing a mistake**: after each submitted batch, the panel lists exactly
+what it logged (kid, date, title), so you can find and delete a wrong entry
+yourself on Beanstack's own reading log. An earlier version tried to
+automate this ("Undo last batch," re-reading the log to learn each new
+entry's Beanstack ID and deleting them) but the create response carries no
+ID, so it had to *guess* each one by diffing the log before/after — reliable
+at the small scale it was first tested at, but at real scale (142 entries in
+one batch) it only resolved a handful. A plain, always-accurate list beats
+an automation that mostly doesn't work.
 
 ### Why a minimum-minutes threshold
 
@@ -171,24 +173,10 @@ rather than silently dropped.
   the Amazon title, so you don't have to leave the panel to log them; edit
   the title first if it needs cleaning up (e.g. trimming a bundle listing
   down to one real book title).
-- **The manual-entry field shape is inferred, not confirmed against a real
-  captured submission.** It mirrors the catalog-match POST with
-  `beanstack_book_id`/`isbn`/lexile fields left blank, which is a
-  reasonable guess for what Beanstack's own "Manually Enter Title" sends,
-  but hasn't been directly verified. Try one manual entry live and check
-  it shows up correctly on Beanstack before trusting it for a whole batch.
 - **`program_id` behavior for kids in 2+ simultaneous Beanstack challenges is
   still unverified** — confirmed working (live, real submission) when
   omitted entirely for a reader with exactly one active challenge; untested
   for a reader enrolled in two overlapping challenges at once.
-- **ID resolution for undo is heuristic, not guaranteed.** Since Beanstack's
-  create response carries no ID, "Undo last batch" learns IDs by diffing
-  the log before/after a submission. If two rows in the *same* batch would
-  land on the exact same (reader, date, normalized title) key, only one ID
-  can be confidently attributed — this shouldn't happen in practice (the
-  source dataset is already deduped to one row per kid/date/title before
-  it reaches this stage), but if an ID can't be resolved, that entry is
-  left out of the undo batch rather than guessed at.
 - No automated end-to-end tests exist against the live services (both
   require an authenticated session) — see `tests/` for what *is* covered
   (the pure request/response logic, against synthetic fixtures).
@@ -242,16 +230,14 @@ patch. `beanstack-main-world.js` runs in the page's actual world
 what it observes to the regular (isolated-world) `beanstack.js` via
 `postMessage` — the standard bridge between the two worlds.
 
-**Why the post-submit log re-read uses `cache: "no-store"`.** "Undo last
-batch" learns each new entry's ID by re-fetching a reader's log right after
-submitting and diffing it against the pre-submit snapshot (see above) — but
-that re-fetch hits the *exact same URL* the pre-submit snapshot already
-requested moments earlier. Live testing saw this under-resolve IDs (3/6,
-then — after trying a settle delay that didn't help — 0/3), which pointed
-away from server-side lag and toward the browser's own HTTP cache serving
-the earlier response instead of hitting the network again. `fetchExistingLog`
-(`reading-log.js`) now passes `cache: "no-store"` to force a real round-trip
-every time it's called, which is what this re-read specifically depends on.
+**Why `fetchExistingLog` uses `cache: "no-store"`.** The idempotency check
+(see above) needs to reflect current server truth every time it runs — if
+you re-run "Find matches" shortly after a previous check, a normal cached
+fetch can serve the browser's own HTTP cache for that same URL instead of
+hitting the network, silently returning a stale snapshot. This surfaced
+while building (and later removing) an "Undo last batch" feature, which
+depended on this same fetch reflecting a submission that had *just*
+happened — `no-store` forces a real round-trip every time.
 
 **Why panel styles use `!important` everywhere.** Both floating panels are
 appended straight onto the host page's `document.body`, which means they're
