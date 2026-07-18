@@ -1,10 +1,12 @@
 # Kindle Reading → Beanstack
 
-A Chrome extension that pulls kids' Kindle / Amazon Kids+ reading activity
-(minutes read per day, per title) from the Amazon Parent Dashboard and helps
-log it into [Beanstack](https://www.beanstack.com/) — the platform many
-public libraries use for summer reading challenges — without re-typing every
-title and day by hand.
+A Chrome extension that automatically syncs kids' Kindle / Amazon Kids+
+reading activity (minutes read per day, per title) into
+[Beanstack](https://www.beanstack.com/) — the platform most public
+libraries use to run summer reading challenges — without re-typing every
+title and day by hand. It reads straight from the Amazon Parent Dashboard
+and logs into Beanstack's reading log for you, with a human review step
+before anything is submitted.
 
 **Status: early / functional.** Built and validated against one family's real
 data first — a real end-to-end submission has been confirmed working (see
@@ -13,15 +15,22 @@ use so far. Review matches carefully, especially early on.
 
 ## Why this exists
 
-Kids who read a lot on Kindle generate reading data every library summer
-program wants credit for, but neither side exposes an official API:
+If your kids read a lot on Kindle or Amazon Kids+ and your library's summer
+reading challenge runs on Beanstack, you already know the problem: there's
+no way to export Amazon's reading data, and no way to bulk-import it into
+Beanstack, so every book and every day gets typed in by hand.
 
-- Amazon's Parent Dashboard has no export/CSV button.
+- Amazon's Parent Dashboard has no export/CSV button for Kindle/Kids+
+  reading activity.
 - Beanstack has no bulk-import for reading logs (only for admin-side roster
-  CSVs).
+  CSVs) — logging reading time means one manual "Log Reading" form entry
+  per book, per day.
 
-Both sides *do* have internal JSON endpoints their own web pages call,
-though — this project uses those directly instead of scraping rendered HTML.
+Searching for "export Kindle reading data to Beanstack" or "sync Amazon
+Kids+ reading to a library reading challenge" turned up nothing, which is
+why this exists. Both sides *do* have internal JSON endpoints their own web
+pages call, though — this project uses those directly instead of scraping
+rendered HTML.
 
 ## How it works
 
