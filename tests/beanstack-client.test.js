@@ -136,6 +136,55 @@ test("buildLogPayload validates its inputs", async () => {
   assert.throws(() => buildLogPayload({ profileId: 1, candidate, date: "2026-07-01", minutes: 0 }));
 });
 
+test("buildLogPayload rejects minutes that round down to 0 — Beanstack requires log_value >= 1", async () => {
+  const [candidate] = await loadFixture("beanstack-search-response.json");
+  assert.throws(
+    () => buildLogPayload({ profileId: 1, candidate, date: "2026-07-01", minutes: 0.4 }),
+    /at least 1/
+  );
+});
+
+test("buildLogPayload accepts minutes that round up to 1", async () => {
+  const [candidate] = await loadFixture("beanstack-search-response.json");
+  const payload = buildLogPayload({ profileId: 1, candidate, date: "2026-07-01", minutes: 0.5 });
+  assert.equal(payload["logged_book[log_value]"], "1");
+});
+
+test("buildLogPayload builds a manual-entry payload with blank catalog fields when there's no candidate", () => {
+  const payload = buildLogPayload({
+    profileId: 999,
+    manualTitle: "Miranda Kenneally Bundle: Catching Jordan, Stealing Parker, Things I Can't Forget",
+    manualAuthor: "Miranda Kenneally",
+    date: "2026-07-16",
+    minutes: 13,
+  });
+  assert.deepEqual(payload, {
+    "logged_book[profile_id]": "999",
+    "logged_book[book_title]": "Miranda Kenneally Bundle: Catching Jordan, Stealing Parker, Things I Can't Forget",
+    "logged_book[book_author]": "Miranda Kenneally",
+    "logged_book[beanstack_book_id]": "",
+    "logged_book[isbn]": "",
+    "logged_book[lexile_information_id]": "",
+    "logged_book[lexile_score]": "",
+    "logged_book[lexile_code]": "",
+    "logged_book[lexile_display]": "",
+    "logged_book[log_type_id]": "2",
+    "logged_book[date_read]": "2026-07-16",
+    "logged_book[log_value]": "13",
+    "logged_book[include_review]": "No",
+    "logged_book[open_library_url]": "",
+  });
+});
+
+test("buildLogPayload defaults manualAuthor to blank when omitted", () => {
+  const payload = buildLogPayload({ profileId: 1, manualTitle: "Some Title", date: "2026-07-01", minutes: 10 });
+  assert.equal(payload["logged_book[book_author]"], "");
+});
+
+test("buildLogPayload throws when neither candidate nor manualTitle is given", () => {
+  assert.throws(() => buildLogPayload({ profileId: 1, date: "2026-07-01", minutes: 10 }));
+});
+
 test("submitLog posts form-encoded data including the CSRF token", async () => {
   let capturedUrl, capturedOpts;
   const fakeFetch = async (url, opts) => {

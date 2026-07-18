@@ -39,7 +39,10 @@ though — this project uses those directly instead of scraping rendered HTML.
    and ISBN when available, for a more precise match), shows you a review
    table before anything is submitted, and — only for entries you accept —
    submits the reading log the same way Beanstack's own "Log Reading" form
-   does.
+   does. Anything the catalog search can't match gets an editable
+   title/author field right in the table (pre-filled from the Amazon title)
+   instead of being stuck — check the box to submit it as a manual entry,
+   the same way Beanstack's own "Manually Enter Title" works.
 3. Nothing is submitted without you reviewing it first.
 
 ### Idempotency & cleanup
@@ -87,7 +90,11 @@ June 2026 (258 day/title entries) found:
 | < 15 min | 34% | 4.7% |
 
 5 minutes is a clean trade — a meaningful cut in tedious entries for
-negligible lost credit. The effect isn't uniform across kids, though: a
+negligible lost credit. Separately, Beanstack itself rejects `log_value`
+below 1 (confirmed live: HTTP 422, "log_value must be greater than or
+equal to 1") — if you set the threshold down near 0, an entry that rounds
+to 0 minutes fails fast locally with a clear message instead of only
+failing after a round trip to the server. The effect isn't uniform across kids, though: a
 reader whose sessions run short (e.g. lots of individual comic issues)
 loses proportionally more at higher thresholds than one who reads in long
 novel-length sessions. That's why it's an adjustable setting, not a
@@ -146,13 +153,30 @@ rather than silently dropped.
   page) narrows it, but different printings of the same book can have
   different ISBNs. Always review matches before submitting — don't trust
   auto-matching blindly, especially for a large backlog.
+- **A search on the exact Amazon title can come back empty even when the
+  book is in Beanstack's catalog** — seen live for titles Amazon decorates
+  with a trailing imprint/series annotation (e.g. "(AMP! Comics for
+  Kids)") or a "The Complete " compilation prefix, neither of which is
+  part of Beanstack's own title. A zero-result search is retried once with
+  those stripped (see `simplifyTitleForSearch`); this recovers some but not
+  all such titles — it's a plain string heuristic, not a real fuzzy match
+  against Beanstack's catalog.
 - **Beanstack's catalog search rejects some unusual titles outright** (HTTP
   400 — seen live for a multi-book bundle listing's Amazon title, which
   runs long and packs in several book titles at once). One entry's search
   failing shows up as a "search failed" row rather than blocking every
-  other entry after it, but that title still will not get logged
-  automatically — use "Manually Enter Title" on Beanstack directly for
-  those.
+  other entry after it. Rows like this — along with ones the catalog
+  search ran but simply had no good match for — get an editable
+  title/author field right in the review table instead, pre-filled from
+  the Amazon title, so you don't have to leave the panel to log them; edit
+  the title first if it needs cleaning up (e.g. trimming a bundle listing
+  down to one real book title).
+- **The manual-entry field shape is inferred, not confirmed against a real
+  captured submission.** It mirrors the catalog-match POST with
+  `beanstack_book_id`/`isbn`/lexile fields left blank, which is a
+  reasonable guess for what Beanstack's own "Manually Enter Title" sends,
+  but hasn't been directly verified. Try one manual entry live and check
+  it shows up correctly on Beanstack before trusting it for a whole batch.
 - **`program_id` behavior for kids in 2+ simultaneous Beanstack challenges is
   still unverified** — confirmed working (live, real submission) when
   omitted entirely for a reader with exactly one active challenge; untested
@@ -217,6 +241,29 @@ patch. `beanstack-main-world.js` runs in the page's actual world
 (`"world": "MAIN"` in the manifest) to patch the real thing, and relays
 what it observes to the regular (isolated-world) `beanstack.js` via
 `postMessage` — the standard bridge between the two worlds.
+
+**Why the post-submit log re-read uses `cache: "no-store"`.** "Undo last
+batch" learns each new entry's ID by re-fetching a reader's log right after
+submitting and diffing it against the pre-submit snapshot (see above) — but
+that re-fetch hits the *exact same URL* the pre-submit snapshot already
+requested moments earlier. Live testing saw this under-resolve IDs (3/6,
+then — after trying a settle delay that didn't help — 0/3), which pointed
+away from server-side lag and toward the browser's own HTTP cache serving
+the earlier response instead of hitting the network again. `fetchExistingLog`
+(`reading-log.js`) now passes `cache: "no-store"` to force a real round-trip
+every time it's called, which is what this re-read specifically depends on.
+
+**Why panel styles use `!important` everywhere.** Both floating panels are
+appended straight onto the host page's `document.body`, which means they're
+exposed to whatever that page's own CSS does to bare element selectors.
+Live testing on Beanstack showed its own form-control styling (larger,
+bolder default type) bleeding through despite matching class selectors here,
+and its own `select` reset was forcing the reader-pairing dropdown to full
+block width, dropping it onto its own line instead of sitting next to the
+kid's name. Ordinary CSS specificity can't reliably out-rank an unknown
+host page's rules, so `panel-chrome.js`'s injected stylesheet uses
+`!important` throughout to guarantee the panel looks the same regardless of
+what site it's sitting on.
 
 The Amazon side originally used the same pattern for kid detection (patching
 `window.fetch` to watch for the activities endpoint firing), but that turned

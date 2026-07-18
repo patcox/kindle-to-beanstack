@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
-import { normalizeTitle, pickBestMatch } from "../extension/lib/matcher.js";
+import { normalizeTitle, pickBestMatch, simplifyTitleForSearch } from "../extension/lib/matcher.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -44,4 +44,22 @@ test("pickBestMatch returns low confidence when the top title doesn't closely ma
   const candidates = await loadFixture("beanstack-search-response.json");
   const result = pickBestMatch({ candidates, queryTitle: "Some Completely Different Book" });
   assert.equal(result.confidence, "low");
+});
+
+test("simplifyTitleForSearch strips a trailing parenthetical annotation", () => {
+  assert.equal(
+    simplifyTitleForSearch("Big Nate: Destined for Awesomeness (Big Nate TV Series Graphic Novel)"),
+    "Big Nate: Destined for Awesomeness"
+  );
+});
+
+test("simplifyTitleForSearch strips a leading 'The Complete ' prefix", () => {
+  assert.equal(
+    simplifyTitleForSearch("The Complete Big Nate: #15 (AMP! Comics for Kids)"),
+    "Big Nate: #15"
+  );
+});
+
+test("simplifyTitleForSearch returns null when there's nothing to strip", () => {
+  assert.equal(simplifyTitleForSearch("Diary of a Wimpy Kid"), null);
 });

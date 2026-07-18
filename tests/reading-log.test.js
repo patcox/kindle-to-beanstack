@@ -80,6 +80,35 @@ test("fetchExistingLog fetches one page per month and concatenates parsed entrie
   assert.equal(entries.length, 2);
 });
 
+test("fetchExistingLog dedupes an entry rendered on two different months' pages (a calendar week spanning a month boundary)", async () => {
+  const julyHtml = await readFile(path.join(__dirname, "fixtures/dated-reading-log.html"), "utf8");
+  // Simulates Beanstack's calendar grid rendering the same trailing/leading
+  // boundary day (and its log entry) on both adjacent months' pages — same
+  // loggedBookId (88888001) as the one already in the July fixture above.
+  const augustHtml = `<!doctype html><html><body>
+    <div class="reader-log-day">
+      <div class="day-number"><span class="show-for-sr">Saturday, July 11, 2026</span></div>
+      <a class="reader-log-item" href="/profiles/99999001/reading_log/88888001">
+        <div class="book-title">Spy school</div>
+        <div class="log-value">4 minutes</div>
+      </a>
+    </div>
+  </body></html>`;
+  const pages = [julyHtml, augustHtml];
+  let call = 0;
+  const fakeFetch = async () => ({ ok: true, text: async () => pages[call++] });
+  const parseHtml = (h) => new JSDOM(h).window.document;
+
+  const entries = await fetchExistingLog(
+    "99999001",
+    { startDate: "2026-07-01", endDate: "2026-08-31" },
+    { fetchImpl: fakeFetch, parseHtml }
+  );
+  const spySchoolCount = entries.filter((e) => e.loggedBookId === "88888001").length;
+  assert.equal(spySchoolCount, 1);
+  assert.equal(entries.length, 2); // Dog Man + one deduped Spy school, not two
+});
+
 test("summarizeExistingLog sums minutes per (date, normalized title)", async () => {
   const doc = await loadFixtureDoc();
   const entries = parseExistingLog(doc);

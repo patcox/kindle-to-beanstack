@@ -11,6 +11,23 @@ export function normalizeTitle(title) {
 }
 
 /**
+ * Amazon listing titles often carry decorations Beanstack's own catalog
+ * title doesn't have — a trailing "(imprint/series name)" annotation (e.g.
+ * "(AMP! Comics for Kids)", "(Big Nate TV Series Graphic Novel)"), or a
+ * "The Complete " prefix on a compilation edition — and an exact-title
+ * search against those comes back with zero candidates even though the
+ * underlying book is in Beanstack's catalog under a plainer title. When a
+ * search comes back empty, retrying once with this simplified title can
+ * still find it. Pure — returns null if there's nothing to strip, so the
+ * caller knows a retry isn't worth it.
+ */
+export function simplifyTitleForSearch(title) {
+  let simplified = title.replace(/\s*\([^)]*\)\s*$/, "").trim();
+  simplified = simplified.replace(/^The Complete\s+/i, "").trim();
+  return simplified && simplified !== title ? simplified : null;
+}
+
+/**
  * @param {{candidates: object[], queryTitle: string, queryIsbn?: string|null}} args
  * @returns {{candidate: object|null, confidence: "high"|"medium"|"low"|"none", reason: string}}
  */

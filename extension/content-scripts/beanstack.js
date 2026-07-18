@@ -25,7 +25,7 @@
     deleteLoggedEntry,
     parseReaderSwitcher,
   } = await import(chrome.runtime.getURL("lib/beanstack-client.js"));
-  const { pickBestMatch, normalizeTitle } = await import(chrome.runtime.getURL("lib/matcher.js"));
+  const { pickBestMatch, normalizeTitle, simplifyTitleForSearch } = await import(chrome.runtime.getURL("lib/matcher.js"));
   const { getKids, getReadingDataset, getMinMinutesThreshold, setMinMinutesThreshold } = await import(
     chrome.runtime.getURL("lib/store.js")
   );
@@ -57,13 +57,12 @@
     panel.id = "kb-beanstack-panel";
     panel.style.cssText = `
       position: fixed; top: 16px; right: 16px; z-index: 999999;
-      width: 440px; max-height: 80vh; overflow: hidden;
+      width: 680px; max-width: 95vw; max-height: 80vh; overflow: hidden;
       background: #fff; color: #111; border: 1px solid #ccc;
       border-radius: 8px; box-shadow: 0 2px 12px rgba(0,0,0,0.25);
-      font: 13px -apple-system, sans-serif;
     `;
     panel.innerHTML = `
-      <div data-kb-role="header" style="cursor:move; user-select:none; display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-bottom:1px solid #eee; font-weight:600;">
+      <div data-kb-role="header" class="kb-bold" style="cursor:move; user-select:none; display:flex; align-items:center; justify-content:space-between; padding:8px 10px; border-bottom:1px solid #eee;">
         <span>Kindle → Beanstack: Review &amp; Log</span>
         <span>
           <button type="button" data-kb-role="minimize" title="Minimize" style="width:22px; height:22px; line-height:1; padding:0;">–</button>
@@ -119,31 +118,44 @@
     const pairings = await getReaderPairings();
 
     if (readers.length === 0) {
-      // Fallback for the rare case the reader-switcher isn't on this page
-      // (e.g. a single-reader account with no switcher at all).
+      // Fallback for pages with no reader-switcher to auto-detect from
+      // (e.g. the Log Reading / catalog search page). A pairing saved
+      // earlier (from a page that did have the switcher) is reused here —
+      // shown as a plain confirmed line, not an editable box. profile_id is
+      // an opaque internal number nobody would recognize or want to type by
+      // hand; if a pairing is wrong, fix it from a page with the switcher,
+      // which lets you pick by name instead. The input below only appears
+      // for a kid with no saved pairing at all yet (the rare single-reader
+      // account with no switcher anywhere).
       section.innerHTML = `
-        <div style="font-weight:600; font-size:12px; color:#555;">Pair each kid with their Beanstack profile ID</div>
-        <div style="color:#888; font-size:12px;">Couldn't auto-detect readers on this page — enter profile_id manually.</div>
+        <div class="kb-bold" style="font-size:12px; color:#555;">Kid ↔ Beanstack reader</div>
+        <div style="color:#888; font-size:12px;">Couldn't auto-detect readers on this page — showing pairings saved from elsewhere. To fix a wrong one, visit a page with the reader switcher.</div>
         ${kids
-          .map(
-            (k) => `
-          <div style="margin-top:4px;">
-            ${escapeHtml(k.name)}:
-            <input type="text" data-child-id="${escapeHtml(k.childDirectedId)}" class="kb-pairing-input"
-                   placeholder="Beanstack profile_id" value="${escapeHtml(pairings[k.childDirectedId] ?? "")}"
-                   style="width:140px;">
-          </div>`
-          )
+          .map((k) => {
+            const saved = pairings[k.childDirectedId];
+            if (saved) {
+              return `<div style="margin-top:4px;">${escapeHtml(k.name)} <span style="color:#999;">(→ ${escapeHtml(saved)})</span></div>`;
+            }
+            return `
+              <div style="margin-top:4px;">
+                ${escapeHtml(k.name)}:
+                <input type="text" data-child-id="${escapeHtml(k.childDirectedId)}" class="kb-pairing-input"
+                       placeholder="Beanstack profile_id" style="width:140px;">
+              </div>`;
+          })
           .join("")}
       `;
       section.querySelectorAll(".kb-pairing-input").forEach((input) => {
-        input.addEventListener("change", () => setReaderPairing(input.dataset.childId, input.value.trim()));
+        input.addEventListener("change", async () => {
+          await setReaderPairing(input.dataset.childId, input.value.trim());
+          await renderPairingSection(panel);
+        });
       });
       return;
     }
 
     section.innerHTML = `
-      <div style="font-weight:600; font-size:12px; color:#555;">Kid ↔ Beanstack reader (auto-detected, matched by name — override below)</div>
+      <div class="kb-bold" style="font-size:12px; color:#555;">Kid ↔ Beanstack reader (auto-detected, matched by name — override below)</div>
       ${kids
         .map(
           (k) => `
@@ -249,21 +261,43 @@
       const entry = toMatch[i];
       statusEl.textContent = `Searching Beanstack's catalog (${i + 1}/${toMatch.length})…`;
       let candidates = [];
+      let searchError = null;
       try {
         candidates = await searchCatalog({ title: entry.title, author: "", isbn: entry.isbn });
       } catch (err) {
-        // One title's search failing (Beanstack has rejected some unusual
-        // titles, e.g. multi-book bundle listings, with a 400) shouldn't
-        // block every other entry after it — show it as a failed/no-match
-        // row instead of aborting the whole batch.
-        searchFailures.push(`${entry.title}: ${err.message}`);
+        searchError = err;
+      }
+      if (candidates.length === 0) {
+        // The exact Amazon title (with its imprint/series decorations)
+        // sometimes matches nothing — or Beanstack rejects it outright with
+        // a 400 for being too long/complex (e.g. a bundle listing) — even
+        // when the underlying book is in the catalog under a plainer title.
+        // Worth one retry with that stripped down either way, not just on
+        // an empty-but-successful result.
+        const simplified = simplifyTitleForSearch(entry.title);
+        if (simplified) {
+          try {
+            candidates = await searchCatalog({ title: simplified, author: "", isbn: entry.isbn });
+            searchError = null;
+          } catch (err) {
+            searchError = err;
+          }
+        }
+      }
+      if (searchError && candidates.length === 0) {
+        // Still no luck after the retry — one title's search failing
+        // shouldn't block every other entry after it; show it as a
+        // failed/no-match row instead of aborting the whole batch.
+        searchFailures.push(`${entry.title}: ${searchError.message}`);
         reviewRows.push({
           entry,
           kidName: kidByChildId.get(entry.childDirectedId) ?? entry.childDirectedId,
           candidate: null,
           confidence: "none",
-          reason: `search failed: ${err.message}`,
+          reason: `search failed: ${searchError.message}`,
           accepted: false,
+          manualTitle: entry.title,
+          manualAuthor: "",
         });
         continue;
       }
@@ -275,6 +309,11 @@
         confidence,
         reason,
         accepted: confidence === "high" || confidence === "medium",
+        // Pre-filled so a "no match" row is submittable right away (as a
+        // manual entry, mirroring Beanstack's own "Manually Enter Title")
+        // without forcing a click first — editable before submitting.
+        manualTitle: candidate ? null : entry.title,
+        manualAuthor: "",
       });
     }
     const failureSuffix = searchFailures.length ? ` (${searchFailures.length} search failed — see table)` : "";
@@ -282,30 +321,60 @@
     renderReviewTable(panel);
   }
 
+  function canAccept(row) {
+    return Boolean(row.candidate) || Boolean(row.manualTitle && row.manualTitle.trim());
+  }
+
+  /** Discards an auto-matched candidate so the row switches to manual entry. */
+  function rejectMatch(row) {
+    row.candidate = null;
+    row.manualTitle = row.entry.title;
+    row.manualAuthor = "";
+    row.accepted = false;
+  }
+
   function renderReviewTable(panel) {
     const container = panel.querySelector("#kb-review-table");
     const confidenceColor = { high: "#2a7", medium: "#c90", low: "#c33", none: "#999" };
     container.innerHTML = `
-      <table style="width:100%; border-collapse:collapse; font-size:12px; margin-top:8px;">
+      <table style="width:100%; border-collapse:collapse; table-layout:fixed; font-size:12px; margin-top:8px;">
+        <colgroup>
+          <col style="width:28px;"><col style="width:64px;"><col style="width:64px;">
+          <col><col><col style="width:44px;"><col style="width:60px;">
+        </colgroup>
         <thead><tr>
           <th style="text-align:left;">✓</th><th style="text-align:left;">Kid</th><th style="text-align:left;">Date</th>
           <th style="text-align:left;">Amazon title</th><th style="text-align:left;">Matched</th>
-          <th style="text-align:left;">Min</th><th style="text-align:left;">Confidence</th>
+          <th style="text-align:left;">Min</th><th style="text-align:left;">Conf.</th>
         </tr></thead>
         <tbody>
           ${reviewRows
-            .map(
-              (row, i) => `
+            .map((row, i) => {
+              const matchedCell = row.candidate
+                ? `
+                  <div title="${escapeHtml(row.candidate.title)}${row.candidate.authors ? ` — ${escapeHtml(row.candidate.authors)}` : ""}">
+                    <div style="overflow-wrap:break-word;">${escapeHtml(row.candidate.title)}</div>
+                    ${row.candidate.authors ? `<div style="color:#888; font-size:11px;">${escapeHtml(row.candidate.authors)}</div>` : ""}
+                  </div>
+                  <button type="button" class="kb-reject-match" data-row="${i}" style="font-size:11px; margin-top:3px; padding:1px 4px;">use manual entry instead</button>
+                `
+                : `
+                  <input type="text" data-row="${i}" class="kb-manual-title" placeholder="Title (manual entry)"
+                         value="${escapeHtml(row.manualTitle ?? "")}" style="width:100%; box-sizing:border-box;">
+                  <input type="text" data-row="${i}" class="kb-manual-author" placeholder="Author (optional)"
+                         value="${escapeHtml(row.manualAuthor ?? "")}" style="width:100%; box-sizing:border-box; display:block; margin-top:2px;">
+                `;
+              return `
             <tr style="border-top:1px solid #eee;">
-              <td><input type="checkbox" data-row="${i}" class="kb-accept-cb" ${row.accepted ? "checked" : ""} ${row.candidate ? "" : "disabled"}></td>
-              <td>${escapeHtml(row.kidName)}</td>
-              <td>${escapeHtml(row.entry.date)}</td>
-              <td>${escapeHtml(row.entry.title)}</td>
-              <td>${row.candidate ? escapeHtml(row.candidate.title) : "(no match)"}</td>
+              <td><input type="checkbox" data-row="${i}" class="kb-accept-cb" ${row.accepted ? "checked" : ""} ${canAccept(row) ? "" : "disabled"}></td>
+              <td style="overflow-wrap:break-word;">${escapeHtml(row.kidName)}</td>
+              <td style="overflow-wrap:break-word;">${escapeHtml(row.entry.date)}</td>
+              <td style="overflow-wrap:break-word;" title="${escapeHtml(row.entry.title)}">${escapeHtml(row.entry.title)}</td>
+              <td>${matchedCell}</td>
               <td>${Math.round(row.entry.minutes)}</td>
-              <td style="color:${confidenceColor[row.confidence]};" title="${escapeHtml(row.reason)}">${row.confidence}</td>
-            </tr>`
-            )
+              <td style="color:${confidenceColor[row.candidate ? row.confidence : "none"]};" title="${escapeHtml(row.reason)}">${row.candidate ? row.confidence : "manual"}</td>
+            </tr>`;
+            })
             .join("")}
         </tbody>
       </table>
@@ -315,14 +384,41 @@
         reviewRows[Number(cb.dataset.row)].accepted = cb.checked;
       });
     });
+    container.querySelectorAll(".kb-reject-match").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        rejectMatch(reviewRows[Number(btn.dataset.row)]);
+        renderReviewTable(panel);
+      });
+    });
+    container.querySelectorAll(".kb-manual-title").forEach((input) => {
+      input.addEventListener("input", () => {
+        const row = reviewRows[Number(input.dataset.row)];
+        row.manualTitle = input.value;
+        const cb = container.querySelector(`.kb-accept-cb[data-row="${input.dataset.row}"]`);
+        cb.disabled = !canAccept(row);
+        if (cb.disabled) {
+          cb.checked = false;
+          row.accepted = false;
+        }
+      });
+    });
+    container.querySelectorAll(".kb-manual-author").forEach((input) => {
+      input.addEventListener("input", () => {
+        reviewRows[Number(input.dataset.row)].manualAuthor = input.value;
+      });
+    });
     panel.querySelector("#kb-submit-btn").style.display = reviewRows.length ? "inline-block" : "none";
+  }
+
+  function submittedTitle(row) {
+    return row.candidate ? row.candidate.title : row.manualTitle;
   }
 
   async function submitAccepted(panel) {
     const statusEl = panel.querySelector("#kb-submit-status");
     const pairings = await getReaderPairings();
     const csrfToken = getCsrfToken();
-    const accepted = reviewRows.filter((r) => r.accepted && r.candidate);
+    const accepted = reviewRows.filter((r) => r.accepted && canAccept(r));
     if (accepted.length === 0) {
       statusEl.textContent = "Nothing accepted to submit.";
       return;
@@ -330,24 +426,42 @@
 
     let successCount = 0;
     const submittedRows = [];
+    const submitFailures = [];
     for (let i = 0; i < accepted.length; i++) {
       const row = accepted[i];
       statusEl.textContent = `Submitting ${i + 1}/${accepted.length}…`;
-      const payload = buildLogPayload({
-        profileId: pairings[row.entry.childDirectedId],
-        candidate: row.candidate,
-        date: row.entry.date,
-        minutes: row.entry.minutes,
-      });
       try {
+        // Built inside the try — an invalid row (e.g. minutes rounding to
+        // 0) should fail just that row, not throw synchronously and abort
+        // every row after it.
+        const payload = buildLogPayload({
+          profileId: pairings[row.entry.childDirectedId],
+          candidate: row.candidate,
+          manualTitle: row.candidate ? undefined : row.manualTitle.trim(),
+          manualAuthor: row.candidate ? undefined : row.manualAuthor?.trim(),
+          date: row.entry.date,
+          minutes: row.entry.minutes,
+        });
         const resp = await submitLog(payload, { csrfToken });
         if (resp.ok) {
           successCount++;
           submittedRows.push(row);
+        } else {
+          // fetch() doesn't throw on a 4xx/5xx status — resp.ok is just
+          // false — so this has to be checked explicitly or a failure like
+          // a 422 validation error passes through completely silently.
+          let detail = `HTTP ${resp.status}`;
+          try {
+            const body = await resp.json();
+            if (body && Object.keys(body).length) detail += `: ${JSON.stringify(body)}`;
+          } catch {
+            // Response body wasn't JSON (or was empty) — the status code is
+            // still useful on its own.
+          }
+          submitFailures.push(`${row.entry.title}: ${detail}`);
         }
       } catch (err) {
-        statusEl.textContent = `Stopped on error submitting "${row.entry.title}": ${err.message}`;
-        break;
+        submitFailures.push(`${row.entry.title}: ${err.message}`);
       }
       // Small randomized delay between submissions — a good-citizen pace,
       // not a requirement of Beanstack's ToS, but cheap insurance.
@@ -355,12 +469,21 @@
     }
 
     await markSubmitted(submittedRows.map((r) => r.entry));
-    statusEl.textContent = `Submitted ${successCount}/${accepted.length}. Resolving log IDs for undo…`;
+    const failureNote = submitFailures.length ? ` Failed: ${submitFailures.join("; ")}.` : "";
+    statusEl.textContent = `Submitted ${successCount}/${accepted.length}.${failureNote} Resolving log IDs for undo…`;
 
     const batchRecords = await resolveNewLoggedBookIds(submittedRows, pairings);
     await recordBatch(batchRecords);
     const resolvedCount = batchRecords.filter((r) => r.loggedBookId).length;
-    statusEl.textContent = `Submitted ${successCount}/${accepted.length}. ${resolvedCount}/${submittedRows.length} ready to undo if needed. Re-run "Find matches" to see what's left.`;
+    const unresolved = batchRecords.filter((r) => !r.loggedBookId);
+    const unresolvedPreview = unresolved
+      .slice(0, 5)
+      .map((r) => `${r.entry.date} "${r.entry.title}"`)
+      .join("; ");
+    const unresolvedNote = unresolved.length
+      ? ` Unresolved: ${unresolvedPreview}${unresolved.length > 5 ? ` (+${unresolved.length - 5} more)` : ""}.`
+      : "";
+    statusEl.textContent = `Submitted ${successCount}/${accepted.length}.${failureNote} ${resolvedCount}/${submittedRows.length} ready to undo if needed.${unresolvedNote} Re-run "Find matches" to see what's left.`;
   }
 
   /**
@@ -368,6 +491,14 @@
    * submitLog), so we learn each new entry's ID by re-reading the log after
    * submitting and finding, per (profile, date, title), whichever ID wasn't
    * there in the pre-submit snapshot already captured by findMatches.
+   *
+   * Live testing first saw this under-resolve (3/6), then — after adding a
+   * settle delay that didn't help — resolve nothing at all (0/3). That
+   * points at the browser's own HTTP cache, not server-side lag: this
+   * re-read hits the *exact same URL* findMatches already fetched moments
+   * earlier, and a plain fetch() is happy to serve that from cache instead
+   * of the network. Fixed at the source (see reading-log.js's `no-store`)
+   * rather than with more delay.
    */
   async function resolveNewLoggedBookIds(submittedRows, pairings) {
     const byProfile = new Map();
@@ -384,11 +515,26 @@
       const afterSummary = summarizeExistingLog(existingAfter, normalizeTitle);
       const beforeSummary = existingLogByProfile.get(profileId);
 
+      // Two rows in the same batch can land on the same (date, title) key —
+      // e.g. two separate Amazon entries for the same book on the same day.
+      // Without tracking claims, both would independently pick the same
+      // "first new id", silently duplicating one row's id onto another
+      // while a real new id for the second row goes unclaimed.
+      const claimedByKey = new Map();
       for (const row of rows) {
-        const key = `${row.entry.date}|${normalizeTitle(row.entry.title)}`;
+        // Keyed on what was actually submitted (candidate.title or the
+        // manually-typed title), not the original Amazon title — those can
+        // differ (a fuzzy catalog match, or an edited manual entry), and
+        // Beanstack's own log always shows the submitted title.
+        const key = `${row.entry.date}|${normalizeTitle(submittedTitle(row))}`;
         const beforeIds = new Set(beforeSummary?.get(key)?.loggedBookIds ?? []);
         const afterIds = afterSummary.get(key)?.loggedBookIds ?? [];
-        const newId = afterIds.find((id) => !beforeIds.has(id)) ?? null;
+        const claimed = claimedByKey.get(key) ?? new Set();
+        const newId = afterIds.find((id) => !beforeIds.has(id) && !claimed.has(id)) ?? null;
+        if (newId) {
+          claimed.add(newId);
+          claimedByKey.set(key, claimed);
+        }
         records.push({ entry: row.entry, loggedBookId: newId });
       }
     }

@@ -109,24 +109,34 @@ export function parseReaderSwitcher(doc = document) {
 }
 
 /**
- * Pure. Builds the logged_books form payload from a chosen catalog match.
- * `minutes` must be a whole number of minutes (Beanstack's own UI parses
- * "1h 55m" into 115 client-side before submitting — we skip that step and
- * pass minutes directly since our source data is already in minutes).
+ * Pure. Builds the logged_books form payload either from a chosen catalog
+ * match (`candidate`) or, when the catalog has no match, a typed
+ * `manualTitle`/`manualAuthor` — mirroring Beanstack's own "Manually Enter
+ * Title" flow (no beanstack_book_id/isbn/lexile fields, since there's no
+ * catalog entry to attach; confirmed live). `minutes` must round to a whole
+ * number of at least 1 (Beanstack's own UI parses "1h 55m" into 115
+ * client-side before submitting — we skip that step and pass minutes
+ * directly since our source data is already in minutes). Beanstack rejects
+ * `log_value` below 1 server-side (confirmed live: HTTP 422, "log_value
+ * must be greater than or equal to 1") — checking `Math.round(minutes)`
+ * here, not just `minutes > 0`, catches a sub-30-second entry (e.g. 0.4
+ * minutes) locally instead of only after a round trip to the server.
  */
-export function buildLogPayload({ profileId, candidate, date, minutes, includeReview = false }) {
+export function buildLogPayload({ profileId, candidate, manualTitle, manualAuthor, date, minutes, includeReview = false }) {
   if (!profileId) throw new Error("profileId is required");
-  if (!candidate) throw new Error("candidate (catalog match) is required");
+  if (!candidate && !manualTitle) throw new Error("either candidate or manualTitle is required");
   if (!date) throw new Error("date (YYYY-MM-DD) is required");
-  if (!Number.isFinite(minutes) || minutes <= 0) throw new Error("minutes must be a positive number");
+  if (!Number.isFinite(minutes) || Math.round(minutes) < 1) {
+    throw new Error("minutes must round to at least 1 (Beanstack requires log_value >= 1)");
+  }
 
-  const lex = candidate.lexile_information ?? {};
+  const lex = candidate?.lexile_information ?? {};
   return {
     "logged_book[profile_id]": String(profileId),
-    "logged_book[book_title]": candidate.title,
-    "logged_book[book_author]": candidate.authors,
-    "logged_book[beanstack_book_id]": String(candidate.id),
-    "logged_book[isbn]": candidate.isbn_13 ?? candidate.isbn_10 ?? "",
+    "logged_book[book_title]": candidate ? candidate.title : manualTitle,
+    "logged_book[book_author]": candidate ? candidate.authors : manualAuthor ?? "",
+    "logged_book[beanstack_book_id]": candidate ? String(candidate.id) : "",
+    "logged_book[isbn]": candidate ? candidate.isbn_13 ?? candidate.isbn_10 ?? "" : "",
     "logged_book[lexile_information_id]": lex.id != null ? String(lex.id) : "",
     "logged_book[lexile_score]": lex.lexile != null ? String(lex.lexile) : "",
     "logged_book[lexile_code]": lex.lexile_code ?? "",
@@ -135,7 +145,7 @@ export function buildLogPayload({ profileId, candidate, date, minutes, includeRe
     "logged_book[date_read]": date,
     "logged_book[log_value]": String(Math.round(minutes)),
     "logged_book[include_review]": includeReview ? "Yes" : "No",
-    "logged_book[open_library_url]": candidate.image ?? "",
+    "logged_book[open_library_url]": candidate?.image ?? "",
   };
 }
 

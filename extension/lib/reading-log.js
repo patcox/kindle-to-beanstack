@@ -87,12 +87,28 @@ export async function fetchExistingLog(
   const months = monthsBetween(startDate, endDate);
   const all = [];
   for (const { year, month } of months) {
-    const resp = await fetchImpl(buildMonthLogUrl(profileId, year, month));
+    // Undo relies on re-fetching this exact same URL again right after a
+    // submission (see resolveNewLoggedBookIds) to see what changed — a
+    // normal cached "default" fetch can serve the browser's HTTP cache
+    // instead of hitting the network, silently returning the pre-submit
+    // snapshot again. `no-store` forces a real round-trip every time.
+    const resp = await fetchImpl(buildMonthLogUrl(profileId, year, month), { cache: "no-store" });
     if (!resp.ok) continue; // a month with no data can still 200; only skip real failures
     const html = await resp.text();
     all.push(...parseExistingLog(parseHtml(html)));
   }
-  return all;
+  // parseExistingLog only dedupes within a single page's own desktop/mobile
+  // double-render. Beanstack's calendar grid also renders trailing/leading
+  // days from the adjacent month in the same page (a week row can span two
+  // months), so a boundary date's entries can appear in *two* separately
+  // fetched month pages when a range spans a month boundary. Dedupe by id
+  // (globally unique, unlike title) across all fetched pages too.
+  const seenIds = new Set();
+  return all.filter((entry) => {
+    if (seenIds.has(entry.loggedBookId)) return false;
+    seenIds.add(entry.loggedBookId);
+    return true;
+  });
 }
 
 /**
